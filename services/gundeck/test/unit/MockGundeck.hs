@@ -54,6 +54,14 @@ data MockEnv = MockEnv
   }
   deriving (Show)
 
+
+-- TODO: there are some misconceptions implemented here that need to be ironed out.  for once,
+-- what's with presences and clients and conns again?  i think we wrote it so that a client is
+-- always online and always has a web socket, we should probably implement the case of an off-line
+-- web client, an off-line mobile client, and a sleeping mobile client that can receive native
+-- notifications.
+
+
 newtype Opaque a = Opaque a
 
 instance Show (Opaque a) where

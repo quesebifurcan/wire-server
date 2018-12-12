@@ -16,7 +16,6 @@ module Push where
 
 import Imports
 import Control.Lens
-import Data.Set as Set
 import Gundeck.Push (pushAll)
 import Gundeck.Types.Push.V2
 import MockGundeck
@@ -25,12 +24,15 @@ import Test.QuickCheck.Instances ()
 import Test.Tasty
 import Test.Tasty.QuickCheck
 
+import qualified Data.Set as Set
+
 
 tests :: TestTree
 tests = testGroup "PushAll"
     [ testProperty "works" pushAllProps
     ]
 
+-- | NB: shrinking is not implemented yet.
 pushAllProps :: Positive Int -> Property
 pushAllProps (Positive len) = mkEnv
   where
@@ -41,6 +43,16 @@ pushAllProps (Positive len) = mkEnv
     mkPushes env = forAll (resize len $ genPushes (env ^. mePresences)) (prop env)
 
     prop :: MockEnv -> [Push] -> Property
-    prop env pushes =
-      let ((), env') = runMockGundeck env (pushAll pushes)
-      in env' ^. meWSQueue === Set.empty
+    prop env pushes = foldl' (.&&.) (once True) props
+      where
+        ((), env') = runMockGundeck env (pushAll pushes)
+        props = [ env' ^. meWSQueue === Set.empty  -- TODO: this is silly
+                , env' ^. meNativeQueue === Set.empty  -- TODO: this is silly, too
+                ]
+
+        -- TODO: less silly properties:
+        -- - meWSQueue contains exactly those notifications that are non-transient.
+        -- - meNativeQueue contains exactly those notifications that have not been sent to a WS.
+        --   (currently, and i'm not sure that's correct: all notifications *not* sent to web
+        --   sockets that return False in meWSReachable.)
+        -- - ...
