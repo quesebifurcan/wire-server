@@ -15,23 +15,11 @@
 module Push where
 
 import Imports
--- import Control.Lens
--- import Control.Monad.Catch
--- import Control.Monad.Except
--- import Control.Monad.State
--- import Data.Id
--- import Data.List1                     (List1)
--- import Data.Misc ((<$$>))
--- import Gundeck.Aws.Arn as Aws
--- import Gundeck.Options
--- import Gundeck.Push
--- import Gundeck.Push.Native              as Native
--- import Gundeck.Types
--- import MockGundeck
--- import qualified Data.Aeson.Types       as Aeson
--- import qualified Data.Set as Set
--- import qualified Network.URI as URI
--- import System.Random
+import Control.Lens
+import Data.Set as Set
+import Gundeck.Push (pushAll)
+import Gundeck.Types.Push.V2
+import MockGundeck
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
 import Test.Tasty
@@ -44,19 +32,15 @@ tests = testGroup "PushAll"
     ]
 
 pushAllProps :: Positive Int -> Property
-pushAllProps = undefined
+pushAllProps (Positive len) = mkEnv
+  where
+    mkEnv :: Property
+    mkEnv = forAll (resize len genMockEnv) mkPushes
 
-{-
-(Positive l) = ioProperty $ do
-    q  <- DelayQueue.new (Clock (return 1)) (Delay 1) (Limit l)
-    r  <- forM [1..l+1] $ \(i :: Int) -> DelayQueue.enqueue q i i
-    l' <- DelayQueue.length q
-    return $ r  == replicate l True ++ [False]
-          && l' == l
--}
+    mkPushes :: MockEnv -> Property
+    mkPushes env = forAll (resize len $ genPushes (env ^. mePresences)) (prop env)
 
--- pushAll :: MonadPushAll m => [Push] -> m ()
-
--- generate a bunch of pushes, together with info on which web socket transmissions should fail.
--- then run pushall, and retrieve the information what was sent over web socket and what was sent
--- via push.
+    prop :: MockEnv -> [Push] -> Property
+    prop env pushes =
+      let ((), env') = runMockGundeck env (pushAll pushes)
+      in env' ^. meWSQueue === Set.empty

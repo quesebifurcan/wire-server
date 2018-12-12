@@ -15,6 +15,7 @@ module Gundeck.Push
     , deleteToken
 
       -- (for testing)
+    , pushAll
     , MonadPushAll(..)
     , MonadNativeTarget(..)
     ) where

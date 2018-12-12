@@ -46,12 +46,18 @@ import qualified Network.URI as URI
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
-  , _meNativeAddress   :: Presence -> Maybe (Address "no-keys")
-  , _meWSReachable     :: Presence -> Bool
-  , _meNativeReachable :: Address "no-keys" -> Bool
+  , _meNativeAddress   :: Opaque (Presence -> Maybe (Address "no-keys"))
+  , _meWSReachable     :: Opaque (Presence -> Bool)
+  , _meNativeReachable :: Opaque (Address "no-keys" -> Bool)
   , _meWSQueue         :: Set NotificationId
   , _meNativeQueue     :: Set NotificationId
   }
+  deriving (Show)
+
+newtype Opaque a = Opaque a
+
+instance Show (Opaque a) where
+  show _ = "Opaque _"
 
 genMockEnv :: Gen MockEnv
 genMockEnv = do
@@ -73,8 +79,8 @@ genMockEnv = do
       addrs = zipWith go prcs protoaddrs
         where go prc adr = (prc, adr (userId prc) (fromJust $ clientId prc) (connId prc))
 
-      _meNativeAddress :: Presence -> Maybe (Address "no-keys")
-      _meNativeAddress = (`lookup` addrs)
+      _meNativeAddress :: Opaque (Presence -> Maybe (Address "no-keys"))
+      _meNativeAddress = Opaque (`lookup` addrs)
 
   _meWSReachable <- genPredicate prcs
   _meNativeReachable <- genPredicate (snd <$> addrs)
@@ -84,8 +90,8 @@ genMockEnv = do
 
   pure MockEnv {..}
 
-genPredicate :: forall a. (Eq a) => [a] -> Gen (a -> Bool)
-genPredicate xs = do
+genPredicate :: forall a. (Eq a) => [a] -> Gen (Opaque (a -> Bool))
+genPredicate xs = Opaque <$> do
   bools :: [Bool] <- vectorOf (length xs) arbitrary
   let reachables :: [a] = mconcat $ zipWith (\x yes -> [ x | yes ]) xs bools
   pure (`elem` reachables)
@@ -128,8 +134,8 @@ genPush env = do
 
 instance Arbitrary Aeson.Value where
   arbitrary = oneof
-    [ Aeson.object <$> listOf ((Aeson..=) <$> arbitrary <*> (arbitrary @Aeson.Value))
-    , Aeson.Array . Vector.fromList <$> listOf arbitrary
+    [ Aeson.object <$> listOf ((Aeson..=) <$> arbitrary <*> (scale (`div` 3) (arbitrary @Aeson.Value)))
+    , Aeson.Array . Vector.fromList <$> listOf (scale (`div` 3) (arbitrary @Aeson.Value))
     , Aeson.String <$> arbitrary
     , Aeson.Number <$> arbitrary
     , Aeson.Bool <$> QC.elements [minBound..]
@@ -140,13 +146,16 @@ instance Arbitrary Aeson.Value where
 ----------------------------------------------------------------------
 -- monad type and instances
 
-newtype MockGundeck a = MockGundeck { fromMockGundeck :: StateT MockEnv (ExceptT String Identity) a }
-  deriving (Functor, Applicative, Monad, MonadState MockEnv, MonadError String)
+newtype MockGundeck a = MockGundeck { fromMockGundeck :: StateT MockEnv Identity a }
+  deriving (Functor, Applicative, Monad, MonadState MockEnv)
 
 makeLenses 'MockEnv
 
+runMockGundeck :: MockEnv -> MockGundeck a -> (a, MockEnv)
+runMockGundeck env (MockGundeck m) = runIdentity $ runStateT m env
+
 instance MonadThrow MockGundeck where
-  throwM = error . show  -- (this is a bit lazy, yes.)
+  throwM = error . show  -- (this is the bad kind of lazy, yes.)
 
 instance MonadPushAll MockGundeck where
   mpaNotificationTTL = pure $ NotificationTTL 300  -- (longer than we want any test to take.)
@@ -188,7 +197,7 @@ mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
-  isreachchable <- gets (^. meWSReachable)
+  Opaque isreachchable <- gets (^. meWSReachable)
   good :: [Presence] <- filter isreachchable . mconcat <$> (snd <$$> gets (^. mePresences))
   pure [ (nid, prcs)
        | (ntfId -> nid, filter (`elem` good) -> prcs) <- notifs
@@ -204,7 +213,7 @@ mockPushNative
   :: (HasCallStack, m ~ MockGundeck)
   => Notification -> Push -> [Address "no-keys"] -> m ()
 mockPushNative (ntfId -> nid) _ addrs = do
-  isreachable <- gets (^. meNativeReachable)
+  Opaque isreachable <- gets (^. meNativeReachable)
   forM_ addrs $ \addr -> do
     when (isreachable addr) . modify $ meNativeQueue %~ Set.insert nid
 
@@ -212,7 +221,7 @@ mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  getaddr <- gets (^. meNativeAddress)
+  Opaque getaddr <- gets (^. meNativeAddress)
   users :: [(UserId, [Presence])] <- gets (^. mePresences)
   mockprcs :: [Presence] <- maybe (error "user not found!") pure $ lookup uid users
   pure . catMaybes $ getaddr <$> mockprcs
