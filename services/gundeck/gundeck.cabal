@@ -179,6 +179,7 @@ test-suite gundeck-tests
         DelayQueue
         Json
         Native
+        Mock
 
     build-depends:
         base
@@ -190,6 +191,7 @@ test-suite gundeck-tests
       , gundeck
       , gundeck-types
       , lens
+      , quickcheck-tests
       , tasty
       , tasty-hunit
       , tasty-quickcheck
