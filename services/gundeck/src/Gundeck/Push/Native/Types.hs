@@ -34,6 +34,8 @@ import Gundeck.Aws.Arn
 import Gundeck.Types
 
 -- | Native push address information of a device.
+--
+-- REFACTOR: the @s@ phantom type can probably go away, too!
 data Address (s :: Symbol) = Address
     { _addrUser      :: !UserId
     , _addrTransport :: !Transport
