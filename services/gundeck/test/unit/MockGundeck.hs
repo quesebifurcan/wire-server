@@ -8,31 +8,35 @@
 {-# LANGUAGE ScopedTypeVariables        #-}
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TupleSections              #-}
+{-# LANGUAGE TypeApplications           #-}
 {-# LANGUAGE ViewPatterns               #-}
 
-{-# OPTIONS_GHC -Wno-incomplete-patterns #-}
+{-# OPTIONS_GHC -Wno-incomplete-patterns -Wno-orphans #-}
 
 module MockGundeck where
 
-import Imports
 import Control.Lens
 import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Id
+import Data.List1
 import Data.List1 (List1)
 import Data.Misc ((<$$>))
+import Data.Range
 import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
 import Gundeck.Push
 import Gundeck.Push.Native as Native
 import Gundeck.Types
+import Imports
 import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
 
 import qualified Data.Aeson.Types as Aeson
 import qualified Data.Set as Set
+import qualified Data.Vector as Vector
 import qualified Network.URI as URI
 
 
@@ -107,21 +111,30 @@ genProtoAddress = do
   pure $ \_addrUser _addrClient _addrConn -> Address {..}
 
 genPushes :: [(UserId, [Presence])] -> Gen [Push]
-genPushes env = listOf (getPush env)
+genPushes = listOf . genPush
 
+-- | REFACTOR: What 'Route's are we still using, and what for?  This code is currently only testing
+-- 'RouteAny'.
 genPush :: [(UserId, [Presence])] -> Gen Push
 genPush env = do
-  _pushRecipients          <- _ :: Range 1 1024 (Set Recipient)
-  _pushOrigin              <- _ :: !UserId
-  _pushConnections         <- _ :: !(Set ConnId)
-  _pushOriginConnection    <- _ :: !(Maybe ConnId)
-  _pushTransient           <- _ :: !Bool
-  _pushNativeIncludeOrigin <- _ :: !Bool
-  _pushNativeEncrypt       <- _ :: !Bool
-  _pushNativeAps           <- _ :: !(Maybe ApsData)
-  _pushNativePriority      <- _ :: !Priority
-  _pushPayload             <- _ :: !(List1 Object)
-  pure Push {..}
+  uid :: UserId <- fst <$> QC.elements env
+  rcps :: Range 1 1024 (Set Recipient) <- do
+    numrcp <- choose (1, 1024)
+    usrs <- vectorOf numrcp (QC.elements env)
+    let mkrcp (u, ps) = Recipient u RouteAny (catMaybes $ clientId <$> ps)
+    pure . unsafeRange . Set.fromList $ mkrcp <$> usrs
+  pload <- List1 <$> arbitrary
+  pure $ newPush uid rcps pload
+
+instance Arbitrary Aeson.Value where
+  arbitrary = oneof
+    [ Aeson.object <$> listOf ((Aeson..=) <$> arbitrary <*> (arbitrary @Aeson.Value))
+    , Aeson.Array . Vector.fromList <$> listOf arbitrary
+    , Aeson.String <$> arbitrary
+    , Aeson.Number <$> arbitrary
+    , Aeson.Bool <$> QC.elements [minBound..]
+    , pure Aeson.Null
+    ]
 
 
 ----------------------------------------------------------------------
