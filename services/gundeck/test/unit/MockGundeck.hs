@@ -20,18 +20,18 @@ import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.State
 import Data.Id
-import Data.List1                     (List1)
+import Data.List1 (List1)
 import Data.Misc ((<$$>))
 import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
 import Gundeck.Push
-import Gundeck.Push.Native              as Native
+import Gundeck.Push.Native as Native
 import Gundeck.Types
 import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
 
-import qualified Data.Aeson.Types       as Aeson
+import qualified Data.Aeson.Types as Aeson
 import qualified Data.Set as Set
 import qualified Network.URI as URI
 
@@ -106,8 +106,22 @@ genProtoAddress = do
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
   pure $ \_addrUser _addrClient _addrConn -> Address {..}
 
-genPushes :: MockEnv -> Gen [Push]
-genPushes _env = undefined
+genPushes :: [(UserId, [Presence])] -> Gen [Push]
+genPushes env = listOf (getPush env)
+
+genPush :: [(UserId, [Presence])] -> Gen Push
+genPush env = do
+  _pushRecipients          <- _ :: Range 1 1024 (Set Recipient)
+  _pushOrigin              <- _ :: !UserId
+  _pushConnections         <- _ :: !(Set ConnId)
+  _pushOriginConnection    <- _ :: !(Maybe ConnId)
+  _pushTransient           <- _ :: !Bool
+  _pushNativeIncludeOrigin <- _ :: !Bool
+  _pushNativeEncrypt       <- _ :: !Bool
+  _pushNativeAps           <- _ :: !(Maybe ApsData)
+  _pushNativePriority      <- _ :: !Priority
+  _pushPayload             <- _ :: !(List1 Object)
+  pure Push {..}
 
 
 ----------------------------------------------------------------------
