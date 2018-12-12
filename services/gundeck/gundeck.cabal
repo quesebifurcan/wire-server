@@ -178,8 +178,9 @@ test-suite gundeck-tests
     other-modules:
         DelayQueue
         Json
+        MockGundeck
         Native
-        Mock
+        Push
 
     build-depends:
         base

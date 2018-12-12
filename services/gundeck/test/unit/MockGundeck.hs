@@ -12,62 +12,28 @@
 
 {-# OPTIONS_GHC -Wno-incomplete-patterns #-}
 
-module Mock where
+module MockGundeck where
 
-import Data.Misc ((<$$>))
-import Data.UUID.V4 as UUID
 import Imports
--- import Bilge
--- import Bilge.Assert
--- import Control.Arrow ((&&&))
--- import Control.Concurrent.Async       (Async, async, wait, forConcurrently_)
 import Control.Lens
 import Control.Monad.Catch
-import Control.Monad.State
 import Control.Monad.Except
--- import Control.Monad.Identity
--- import Control.Retry                  (retrying, constantDelay, limitRetries)
--- import Data.Aeson              hiding (json)
--- import Data.Aeson.Lens
--- import Data.ByteString.Conversion
--- import Data.ByteString.Lazy           (fromStrict)
+import Control.Monad.State
 import Data.Id
 import Data.List1                     (List1)
--- import Data.Range
--- import Data.UUID.V4
--- import Gundeck.Monad
+import Data.Misc ((<$$>))
+import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
-import Test.QuickCheck.Instances ()
 import Gundeck.Push
 import Gundeck.Push.Native              as Native
--- import Gundeck.Push.Native.Types
 import Gundeck.Types
--- import Network.URI
--- import Safe
--- import System.Logger                    as Log
 import System.Random
--- import System.Timeout
 import Test.QuickCheck as QC
-import Test.Tasty
--- import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
+import Test.QuickCheck.Instances ()
 
-import qualified Data.Set as Set
--- import qualified Cassandra              as Cql
 import qualified Data.Aeson.Types       as Aeson
--- import qualified Data.ByteString        as BS
--- import qualified Data.ByteString.Base16 as B16
--- import qualified Data.ByteString.Char8  as C
--- import qualified Data.ByteString.Lazy   as BL
--- import qualified Data.HashMap.Strict    as HashMap
--- import qualified Data.List1             as List1
--- import qualified Data.Set               as Set
--- import qualified Data.Text.Encoding     as T
--- import qualified Data.UUID              as UUID
--- import qualified Gundeck.Push.Data      as Push
--- import qualified Network.HTTP.Client    as Http
--- import qualified Network.WebSockets     as WS
--- import qualified Prelude
+import qualified Data.Set as Set
+import qualified Network.URI as URI
 
 
 ----------------------------------------------------------------------
@@ -104,7 +70,7 @@ genMockEnv = do
         where go prc adr = (prc, adr (userId prc) (fromJust $ clientId prc) (connId prc))
 
       _meNativeAddress :: Presence -> Maybe (Address "no-keys")
-      _meNativeAddress = lookup addrs
+      _meNativeAddress = (`lookup` addrs)
 
   _meWSReachable <- genPredicate prcs
   _meNativeReachable <- genPredicate (snd <$> addrs)
@@ -114,32 +80,34 @@ genMockEnv = do
 
   pure MockEnv {..}
 
-genPredicate :: forall a. (Eq a, Ord a) => [a] -> Gen (a -> Bool)
+genPredicate :: forall a. (Eq a) => [a] -> Gen (a -> Bool)
 genPredicate xs = do
   bools :: [Bool] <- vectorOf (length xs) arbitrary
   let reachables :: [a] = mconcat $ zipWith (\x yes -> [ x | yes ]) xs bools
   pure (`elem` reachables)
 
-genPresence :: UserId -> Gen Presence
+genPresence :: HasCallStack => UserId -> Gen Presence
 genPresence uid = do
-  connId <- Id <$> UUID.nextRandom
-  clientId <- Just . Id <$> UUID.nextRandom
-  let userId = uid
-      resource = mempty
+  connId   <- ConnId <$> arbitrary
+  clientId <- Just . newClientId <$> arbitrary
+  let userId    = uid
+      resource  = URI . fromJust $ URI.parseURI "http://example.com"
       createdAt = 0
-      __field = mempty
+      __field   = mempty
   pure Presence {..}
 
-genAddress :: Gen (UserId -> ClientId -> ConnId -> Address "no-keys")
-genAddress = do
+genProtoAddress :: Gen (UserId -> ClientId -> ConnId -> Address "no-keys")
+genProtoAddress = do
   _addrTransport <- QC.elements [minBound..]
-  let _addrApp = pure "AppName"
+  arnEpId <- EndpointId <$> arbitrary
+  let _addrApp = "AppName"
       _addrToken = Token "tok"
-      _addrEndpoint = SnsArn "" Tokyo _ _
+      _addrEndpoint = Aws.mkSnsArn Tokyo (Account "acc") eptopic
+      eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
   pure $ \_addrUser _addrClient _addrConn -> Address {..}
 
 genPushes :: MockEnv -> Gen [Push]
-genPushes _ = _
+genPushes _env = undefined
 
 
 ----------------------------------------------------------------------
@@ -217,34 +185,7 @@ mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  getaddr <- gets (^. mePresenceAddress)
+  getaddr <- gets (^. meNativeAddress)
   users :: [(UserId, [Presence])] <- gets (^. mePresences)
   mockprcs :: [Presence] <- maybe (error "user not found!") pure $ lookup uid users
   pure . catMaybes $ getaddr <$> mockprcs
-
-
-----------------------------------------------------------------------
--- tests
-
-tests :: TestTree
-tests = testGroup "PushAll"
-    [ testProperty "works" pushAllProps
-    ]
-
-pushAllProps :: Positive Int -> Property
-pushAllProps = undefined
-
-{-
-(Positive l) = ioProperty $ do
-    q  <- DelayQueue.new (Clock (return 1)) (Delay 1) (Limit l)
-    r  <- forM [1..l+1] $ \(i :: Int) -> DelayQueue.enqueue q i i
-    l' <- DelayQueue.length q
-    return $ r  == replicate l True ++ [False]
-          && l' == l
--}
-
--- pushAll :: MonadPushAll m => [Push] -> m ()
-
--- generate a bunch of pushes, together with info on which web socket transmissions should fail.
--- then run pushall, and retrieve the information what was sent over web socket and what was sent
--- via push.

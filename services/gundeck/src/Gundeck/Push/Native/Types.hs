@@ -7,7 +7,7 @@ module Gundeck.Push.Native.Types
     ( Result  (..)
     , Failure (..)
     , Message (..)
-    , Address (Address)
+    , Address (..)
     , addrUser
     , addrTransport
     , addrApp
@@ -43,6 +43,7 @@ data Address (s :: Symbol) = Address
     , _addrConn      :: !ConnId
     , _addrClient    :: !ClientId
     }
+  deriving (Eq)
 
 makeLenses ''Address
 
