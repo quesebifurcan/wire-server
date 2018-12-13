@@ -46,9 +46,9 @@ import qualified Network.URI as URI
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
-  , _meNativeAddress   :: Opaque (Presence -> Maybe (Address "no-keys"))
-  , _meWSReachable     :: Opaque (Presence -> Bool)
-  , _meNativeReachable :: Opaque (Address "no-keys" -> Bool)
+  , _meNativeAddress   :: [(Presence, Address "no-keys")]
+  , _meWSReachable     :: [Presence]
+  , _meNativeReachable :: [Address "no-keys"]
   , _meWSQueue         :: Set NotificationId
   , _meNativeQueue     :: Set NotificationId
   }
@@ -60,12 +60,6 @@ data MockEnv = MockEnv
 -- always online and always has a web socket, we should probably implement the case of an off-line
 -- web client, an off-line mobile client, and a sleeping mobile client that can receive native
 -- notifications.
-
-
-newtype Opaque a = Opaque a
-
-instance Show (Opaque a) where
-  show _ = "Opaque _"
 
 genMockEnv :: Gen MockEnv
 genMockEnv = do
@@ -83,26 +77,23 @@ genMockEnv = do
       len <- choose (length prcs `div` 2, length prcs)
       vectorOf len genProtoAddress
 
-  let addrs :: [(Presence, Address "no-keys")]
-      addrs = zipWith go prcs protoaddrs
+  let _meNativeAddress :: [(Presence, Address "no-keys")]
+      _meNativeAddress = zipWith go prcs protoaddrs
         where go prc adr = (prc, adr (userId prc) (fromJust $ clientId prc) (connId prc))
 
-      _meNativeAddress :: Opaque (Presence -> Maybe (Address "no-keys"))
-      _meNativeAddress = Opaque (`lookup` addrs)
-
   _meWSReachable <- genPredicate prcs
-  _meNativeReachable <- genPredicate (snd <$> addrs)
+  _meNativeReachable <- genPredicate (snd <$> _meNativeAddress)
 
   let _meWSQueue = mempty
       _meNativeQueue = mempty
 
   pure MockEnv {..}
 
-genPredicate :: forall a. (Eq a) => [a] -> Gen (Opaque (a -> Bool))
-genPredicate xs = Opaque <$> do
+genPredicate :: forall a. (Eq a) => [a] -> Gen [a]
+genPredicate xs = do
   bools :: [Bool] <- vectorOf (length xs) arbitrary
   let reachables :: [a] = mconcat $ zipWith (\x yes -> [ x | yes ]) xs bools
-  pure (`elem` reachables)
+  pure reachables
 
 genPresence :: HasCallStack => UserId -> Gen Presence
 genPresence uid = do
@@ -205,7 +196,7 @@ mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
-  Opaque isreachchable <- gets (^. meWSReachable)
+  (flip elem -> isreachchable) <- gets (^. meWSReachable)
   good :: [Presence] <- filter isreachchable . mconcat <$> (snd <$$> gets (^. mePresences))
   pure [ (nid, prcs)
        | (ntfId -> nid, filter (`elem` good) -> prcs) <- notifs
@@ -221,7 +212,7 @@ mockPushNative
   :: (HasCallStack, m ~ MockGundeck)
   => Notification -> Push -> [Address "no-keys"] -> m ()
 mockPushNative (ntfId -> nid) _ addrs = do
-  Opaque isreachable <- gets (^. meNativeReachable)
+  (flip elem -> isreachable) <- gets (^. meNativeReachable)
   forM_ addrs $ \addr -> do
     when (isreachable addr) . modify $ meNativeQueue %~ Set.insert nid
 
@@ -229,7 +220,7 @@ mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  Opaque getaddr <- gets (^. meNativeAddress)
+  (flip lookup -> getaddr) <- gets (^. meNativeAddress)
   users :: [(UserId, [Presence])] <- gets (^. mePresences)
   mockprcs :: [Presence] <- maybe (error "user not found!") pure $ lookup uid users
   pure . catMaybes $ getaddr <$> mockprcs
