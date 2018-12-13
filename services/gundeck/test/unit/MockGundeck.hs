@@ -48,9 +48,9 @@ type Payload = List1 Aeson.Object
 
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
-  , _mePresences       :: [(UserId, [Presence])]
-  , _meNativeAddress   :: Map Presence (Address "no-keys")
-  , _meWSReachable     :: Set Presence
+  , _meRecipients      :: [Recipient]
+  , _meNativeAddress   :: Map Recipient (Address "no-keys")
+  , _meWSReachable     :: Set Recipient
   , _meNativeReachable :: Set (Address "no-keys")
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
@@ -88,25 +88,22 @@ genMockEnv = do
   _meStdGen <- do
     mkStdGen <$> arbitrary
 
-  _mePresences <- do
-    uids :: [UserId] <- arbitrary
-    forM uids $ \uid -> (uid,) <$> listOf1 (genPresence uid)
+  _meRecipients :: [Recipient]
+    <- listOf1 genRecipient
 
-  prcs :: [Presence]
-    <- shuffle . mconcat $ snd <$> _mePresences
-  protoaddrs :: [UserId -> ClientId -> ConnId -> Address "no-keys"]
+  protoaddrs :: [UserId -> ClientId -> Address "no-keys"]
     <- do
-      len <- choose (length prcs `div` 2, length prcs)
+      len <- let l = length _meRecipients in choose (l `div` 2, l)
       vectorOf len genProtoAddress
 
-  let _meNativeAddress :: Map Presence (Address "no-keys")
+  let _meNativeAddress :: Map Recipient (Address "no-keys")
       _meNativeAddress = Map.fromList addrs
 
-      addrs :: [(Presence, Address "no-keys")]
-      addrs = zipWith go prcs protoaddrs
-        where go prc adr = (prc, adr (userId prc) (fromJust $ clientId prc) (connId prc))
+      addrs :: [(Recipient, Address "no-keys")]
+      addrs = mconcat $ zipWith go _meRecipients protoaddrs
+        where go rcp@(Recipient uid _ cids) adr = (\cid -> (rcp, adr uid cid)) <$> cids
 
-  _meWSReachable <- genPredicate prcs
+  _meWSReachable <- genPredicate _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
 
   let _meNativeQueue = mempty
@@ -119,20 +116,27 @@ genPredicate xs = Set.fromList <$> do
   let reachables :: [a] = mconcat $ zipWith (\x yes -> [ x | yes ]) xs bools
   pure reachables
 
-genPresence :: HasCallStack => UserId -> Gen Presence
-genPresence uid = do
-  cid <- newClientId <$> arbitrary
-  pure $ fakePresence uid cid
+genRecipient :: HasCallStack => Gen Recipient
+genRecipient = do
+  uid  <- arbitrary
+  cids <- newClientId <$$> arbitrary
+  pure $ Recipient uid RouteAny cids
+
+fakePresences :: Recipient -> [Presence]
+fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids
+
+fakeConnId :: ConnId
+fakeConnId = ConnId mempty
 
 fakePresence :: UserId -> ClientId -> Presence
 fakePresence userId (Just -> clientId) = Presence {..}
   where
-    connId    = ConnId mempty
+    connId    = fakeConnId
     resource  = URI . fromJust $ URI.parseURI "http://example.com"
     createdAt = 0
     __field   = mempty
 
-genProtoAddress :: Gen (UserId -> ClientId -> ConnId -> Address "no-keys")
+genProtoAddress :: Gen (UserId -> ClientId -> Address "no-keys")
 genProtoAddress = do
   _addrTransport <- QC.elements [minBound..]
   arnEpId <- EndpointId <$> arbitrary
@@ -140,23 +144,22 @@ genProtoAddress = do
       _addrToken = Token "tok"
       _addrEndpoint = Aws.mkSnsArn Tokyo (Account "acc") eptopic
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
-  pure $ \_addrUser _addrClient _addrConn -> Address {..}
+      _addrConn = fakeConnId
+  pure $ \_addrUser _addrClient -> Address {..}
 
-genPushes :: [(UserId, [Presence])] -> Gen [Push]
+genPushes :: [Recipient] -> Gen [Push]
 genPushes = listOf . genPush
 
 -- | REFACTOR: What 'Route's are we still using, and what for?  This code is currently only testing
 -- 'RouteAny'.
-genPush :: [(UserId, [Presence])] -> Gen Push
-genPush env = do
-  uid :: UserId <- fst <$> QC.elements env
+genPush :: [Recipient] -> Gen Push
+genPush allrcps = do
+  sender :: UserId <- (^. recipientId) <$> QC.elements allrcps
   rcps :: Range 1 1024 (Set Recipient) <- do
-    numrcp <- choose (1, 1024)
-    usrs <- vectorOf numrcp (QC.elements env)
-    let mkrcp (u, ps) = Recipient u RouteAny (catMaybes $ clientId <$> ps)
-    pure . unsafeRange . Set.fromList $ mkrcp <$> usrs
+    numrcp <- choose (1, min 1024 (length allrcps))
+    unsafeRange . Set.fromList <$> vectorOf numrcp (QC.elements allrcps)
   pload <- List1 <$> arbitrary
-  pure $ newPush uid rcps pload
+  pure $ newPush sender rcps pload
 
 instance Arbitrary Aeson.Value where
   arbitrary = oneof
