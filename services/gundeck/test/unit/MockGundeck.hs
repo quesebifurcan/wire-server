@@ -44,13 +44,15 @@ import qualified Network.URI as URI
 ----------------------------------------------------------------------
 -- env
 
+type Payload = List1 Aeson.Object
+
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
   , _meNativeAddress   :: Map Presence (Address "no-keys")
   , _meWSReachable     :: Set Presence
   , _meNativeReachable :: Set (Address "no-keys")
-  , _meNativeQueue     :: Map NotificationId (UserId, ClientId)
+  , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
   deriving (Show)
 
@@ -119,13 +121,16 @@ genPredicate xs = Set.fromList <$> do
 
 genPresence :: HasCallStack => UserId -> Gen Presence
 genPresence uid = do
-  connId   <- ConnId <$> arbitrary
-  clientId <- Just . newClientId <$> arbitrary
-  let userId    = uid
-      resource  = URI . fromJust $ URI.parseURI "http://example.com"
-      createdAt = 0
-      __field   = mempty
-  pure Presence {..}
+  cid <- newClientId <$> arbitrary
+  pure $ fakePresence uid cid
+
+fakePresence :: UserId -> ClientId -> Presence
+fakePresence userId (Just -> clientId) = Presence {..}
+  where
+    connId    = ConnId mempty
+    resource  = URI . fromJust $ URI.parseURI "http://example.com"
+    createdAt = 0
+    __field   = mempty
 
 genProtoAddress :: Gen (UserId -> ClientId -> ConnId -> Address "no-keys")
 genProtoAddress = do
@@ -228,16 +233,16 @@ mockBulkPush notifs = do
 -- | persisting notification is not needed for the tests at the moment, so we do nothing here.
 mockStreamAdd
   :: (HasCallStack, m ~ MockGundeck)
-  => NotificationId -> List1 NotificationTarget -> List1 Aeson.Object -> NotificationTTL -> m ()
+  => NotificationId -> List1 NotificationTarget -> Payload -> NotificationTTL -> m ()
 mockStreamAdd _ _ _ _ = pure ()
 
 mockPushNative
   :: (HasCallStack, m ~ MockGundeck)
   => Notification -> Push -> [Address "no-keys"] -> m ()
-mockPushNative (ntfId -> nid) _ addrs = do
+mockPushNative _nid ((^. pushPayload) -> payload) addrs = do
   (flip elem -> isreachable) <- gets (^. meNativeReachable)
   forM_ addrs $ \addr -> do
-    when (isreachable addr) . modify $ meNativeQueue %~ Map.insert nid (addr ^. addrUser, addr ^. addrClient)
+    when (isreachable addr) . modify $ meNativeQueue %~ Map.insert (addr ^. addrUser, addr ^. addrClient) payload
 
 mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
