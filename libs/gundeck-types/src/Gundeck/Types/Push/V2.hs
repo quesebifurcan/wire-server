@@ -177,6 +177,8 @@ instance FromJSON ApsData where
 -----------------------------------------------------------------------------
 -- Priority
 
+-- | REFACTOR: do we every ues LowPriority?  easy to test, just remove the constructor.  if it is
+-- not used anywhere, consider removing the entire type, or just the unused constructor.
 data Priority = LowPriority | HighPriority
     deriving (Eq, Show, Ord, Enum)
 

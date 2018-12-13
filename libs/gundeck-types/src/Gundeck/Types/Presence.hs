@@ -18,7 +18,7 @@ data Presence = Presence
     { userId    :: !UserId
     , connId    :: !ConnId
     , resource  :: !URI  -- ^ cannon instance hosting the presence
-    , clientId  :: !(Maybe ClientId)
+    , clientId  :: !(Maybe ClientId)  -- ^ REFACTOR: when is this 'Nothing'?  or can we remove the 'Maybe'?
     , createdAt :: !Milliseconds
     , __field   :: !Lazy.ByteString -- temp. addition to ease migration
     } deriving (Eq, Show)

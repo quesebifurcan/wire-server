@@ -54,13 +54,33 @@ data MockEnv = MockEnv
   }
   deriving (Show)
 
-
--- TODO: there are some misconceptions implemented here that need to be ironed out.  for once,
--- what's with presences and clients and conns again?  i think we wrote it so that a client is
--- always online and always has a web socket, we should probably implement the case of an off-line
--- web client, an off-line mobile client, and a sleeping mobile client that can receive native
--- notifications.
-
+-- | Generate an environment probabilistically containing the following situations:
+--
+-- 1. device connected to web socket, web socket delivery will work
+-- 2. device connected to web socket, web socket delivery will NOT work
+-- 3. device NOT connected to web socket, native push token registered, push will succeed
+-- 4. device NOT connected to web socket, native push token registered, push will fail
+-- 5. device NOT connected to web socket, no native push token registered
+--
+-- TODO: trying to undrestand gundeck...
+--
+-- There is ConnId and ClientId.  The comments that I wrote (and @Tiago approved) say that Connid is
+-- a temporary handle for the web socket connection, and ClientId is the fingerprint (kinda).  But
+-- the Presence type and the persistence functions in Gundeck.Push.Data suggest that ConnId is
+-- always there, and ClientId only sometimes.  how does that fit?
+--
+-- also, i need to match a ClientId to a push token, but it looks like there is only a mapping from
+-- UserId to all Addresses of the user (pointing to all devices via push, and containing a Token,
+-- but not a PushToken.
+--
+-- i get a feeling that there is a lot more room for simplifying things...
+--
+-- some wild guesses: (1) there is a mapping UserId, ClientId -> Address in Gundeck.Push.Data,
+-- simplified to UserId -> [Address] (where Address contains the ClientId).  (2) the ConnId in rows
+-- where there is no websocket is just outdated or empty or something, and will be ignored.  (3) the
+-- fact that ClientId is allowed to be Maybe in Presence has historical reasons and is not used any
+-- more.  (4) there is always a Presence for a device, even if there never was a websocket
+-- connection.
 genMockEnv :: Gen MockEnv
 genMockEnv = do
   _meStdGen <- do
