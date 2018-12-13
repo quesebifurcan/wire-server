@@ -50,7 +50,7 @@ data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _meRecipients      :: [Recipient]
   , _meNativeAddress   :: Map UserId (Map ClientId (Address "no-keys"))
-  , _meWSReachable     :: Set Recipient
+  , _meWSReachable     :: Set (UserId, ClientId)
   , _meNativeReachable :: Set (Address "no-keys")
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
@@ -83,12 +83,15 @@ genMockEnv = do
       _meNativeAddress = Map.fromList $ (_2 %~ Map.fromList)
         <$> [ (uid, (, addr) <$> cids) | (Recipient uid _ cids, addr) <- addrs ]
 
-  _meWSReachable <- genPredicate _meRecipients
+  _meWSReachable <- genPredicate . mconcat $ recipientToIds <$> _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
 
   let _meNativeQueue = mempty
 
   pure MockEnv {..}
+
+recipientToIds :: Recipient -> [(UserId, ClientId)]
+recipientToIds (Recipient uid _ cids) = (uid,) <$> cids
 
 genPredicate :: forall a. (Eq a, Ord a) => [a] -> Gen (Set a)
 genPredicate xs = Set.fromList <$> do
@@ -108,7 +111,7 @@ fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids
 fakePresence :: UserId -> ClientId -> Presence
 fakePresence userId (Just -> clientId) = Presence {..}
   where
-    connId    = fakeConnId
+    connId    = fakeConnId  -- take clientId
     resource  = URI . fromJust $ URI.parseURI "http://example.com"
     createdAt = 0
     __field   = mempty
@@ -218,9 +221,15 @@ mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
-  (flip elem -> isreachchable) <- gets (^. meWSReachable)
+  filterReachables :: [Recipient] -> [Recipient] <- do
+    -- remove all clients that are not reachable from all recipients.  remove recpients without
+    -- clients from output list.
+    reachables <- gets (^. meWSReachable)
+    let go = filter (not . null . (^. recipientClients))
+           . fmap (\(Recipient uid route cids) -> Recipient uid route $ filter ((`elem` reachables) . (uid,)) cids)
+    pure go
   good :: [Presence]
-    <- mconcat . fmap fakePresences . filter isreachchable <$> gets (^. meRecipients)
+    <- mconcat . fmap fakePresences . filterReachables <$> gets (^. meRecipients)
   pure [ (nid, prcs)
        | (ntfId -> nid, filter (`elem` good) -> prcs) <- notifs
        , not $ null prcs

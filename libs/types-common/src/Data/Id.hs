@@ -136,9 +136,13 @@ instance Arbitrary (Id a) where
 -- ConnId ----------------------------------------------------------------------
 
 -- | Handle for a device.  Used mostly by Cannon and Gundeck to identify a websocket connection.
--- Historically, it is older than 'ClientId' and precedes end-to-end encryption, but it may be
--- replaced by 'ClientId' at some point in the future.  Unique only together with a 'UserId', stored
--- in Redis, lives as long as the device is connected.  See also: 'Presence'.
+-- Historically, it is older than 'ClientId' and precedes end-to-end encryption.  Unique only
+-- together with a 'UserId', stored in gundeck both in Redis *and* on Cassandra, lives as long as
+-- the device is connected.  See also: 'Presence'.
+
+-- WRONG: ConnId is based on / derived from the access token, so no web socket is needed to have one.
+-- see ~/src/wire/wire-server/libs/zauth/src/Data/ZAuth/Token.hs, type Access.
+
 newtype ConnId = ConnId
     { fromConnId :: ByteString
     } deriving ( Eq

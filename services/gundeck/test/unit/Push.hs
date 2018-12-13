@@ -53,22 +53,23 @@ pushAllProps (Positive len) = mkEnv
                 ]
 
         expectNative :: Map (UserId, ClientId) Payload
-        expectNative = Map.fromList result
+        expectNative = Map.fromList reachables
           where
-            result :: [((UserId, ClientId), Payload)]
-            result = mconcat $ go <$> withids
+            reachables :: [((UserId, ClientId), Payload)]
+            reachables = filter (reachableNative . fst)
+                       . filter (not . reachableWS . fst)
+                       . mconcat
+                       $ go <$> rcps
               where
-                go ((uid, cids), pay) = [ ((uid, cid), pay) | cid <- cids ]
+                go :: (Recipient, Payload) -> [((UserId, ClientId), Payload)]
+                go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
-            withids :: [((UserId, [ClientId]), Payload)]
-            withids = (_1 %~ (\rcp -> (rcp ^. recipientId, rcp ^. recipientClients))) <$> reachables
+                reachableWS :: (UserId, ClientId) -> Bool
+                reachableWS = (`elem` (env ^. meWSReachable))
 
-            reachables :: [(Recipient, Payload)]
-            reachables = filter go rcps
-              where
-                go = maybe False (`elem` (env ^. meNativeReachable))
-                   . (`Map.lookup` (env ^. meNativeAddress))
-                   . fst
+                reachableNative :: (UserId, ClientId) -> Bool
+                reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
+                  where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
 
             rcps :: [(Recipient, Payload)]
             rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes

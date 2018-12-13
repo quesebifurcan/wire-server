@@ -23,6 +23,8 @@ data Presence = Presence
     , clientId  :: !(Maybe ClientId)  -- ^ REFACTOR: this is 'Nothing' iff the presence is older
                                       -- than mandatory end-to-end encryption, so perhaps it's soon
                                       -- time to get rid of this 'Maybe'.
+               -- WRONG: there is also api clients that don't have a client id: ...
+
     , createdAt :: !Milliseconds
     , __field   :: !Lazy.ByteString -- temp. addition to ease migration
     } deriving (Eq, Ord, Show)
