@@ -36,6 +36,7 @@ import Test.QuickCheck.Instances ()
 
 import qualified Data.Aeson.Types as Aeson
 import qualified Data.Set as Set
+import qualified Data.Map as Map
 import qualified Data.Vector as Vector
 import qualified Network.URI as URI
 
@@ -46,11 +47,10 @@ import qualified Network.URI as URI
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
-  , _meNativeAddress   :: [(Presence, Address "no-keys")]
-  , _meWSReachable     :: [Presence]
-  , _meNativeReachable :: [Address "no-keys"]
-  , _meWSQueue         :: Set NotificationId
-  , _meNativeQueue     :: Set NotificationId
+  , _meNativeAddress   :: [(Presence, Address "no-keys")]  -- TODO: make this a Map?
+  , _meWSReachable     :: [Presence]  -- TODO: make this Set?
+  , _meNativeReachable :: [Address "no-keys"]  -- TODO: make this Set?
+  , _meNativeQueue     :: Map NotificationId (UserId, ClientId)
   }
   deriving (Show)
 
@@ -104,8 +104,7 @@ genMockEnv = do
   _meWSReachable <- genPredicate prcs
   _meNativeReachable <- genPredicate (snd <$> _meNativeAddress)
 
-  let _meWSQueue = mempty
-      _meNativeQueue = mempty
+  let _meNativeQueue = mempty
 
   pure MockEnv {..}
 
@@ -223,10 +222,11 @@ mockBulkPush notifs = do
        , not $ null prcs
        ]
 
+-- | persisting notification is not needed for the tests at the moment, so we do nothing here.
 mockStreamAdd
   :: (HasCallStack, m ~ MockGundeck)
   => NotificationId -> List1 NotificationTarget -> List1 Aeson.Object -> NotificationTTL -> m ()
-mockStreamAdd nid _ _ _ = modify $ meWSQueue %~ Set.insert nid
+mockStreamAdd _ _ _ _ = pure ()
 
 mockPushNative
   :: (HasCallStack, m ~ MockGundeck)
@@ -234,7 +234,7 @@ mockPushNative
 mockPushNative (ntfId -> nid) _ addrs = do
   (flip elem -> isreachable) <- gets (^. meNativeReachable)
   forM_ addrs $ \addr -> do
-    when (isreachable addr) . modify $ meNativeQueue %~ Set.insert nid
+    when (isreachable addr) . modify $ meNativeQueue %~ Map.insert nid (addr ^. addrUser, addr ^. addrClient)
 
 mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
