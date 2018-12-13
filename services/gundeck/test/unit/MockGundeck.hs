@@ -48,8 +48,8 @@ data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
   , _meNativeAddress   :: Map Presence (Address "no-keys")
-  , _meWSReachable     :: [Presence]  -- TODO: make this Set?
-  , _meNativeReachable :: [Address "no-keys"]  -- TODO: make this Set?
+  , _meWSReachable     :: Set Presence
+  , _meNativeReachable :: Set (Address "no-keys")
   , _meNativeQueue     :: Map NotificationId (UserId, ClientId)
   }
   deriving (Show)
@@ -111,8 +111,8 @@ genMockEnv = do
 
   pure MockEnv {..}
 
-genPredicate :: forall a. (Eq a) => [a] -> Gen [a]
-genPredicate xs = do
+genPredicate :: forall a. (Eq a, Ord a) => [a] -> Gen (Set a)
+genPredicate xs = Set.fromList <$> do
   bools :: [Bool] <- vectorOf (length xs) arbitrary
   let reachables :: [a] = mconcat $ zipWith (\x yes -> [ x | yes ]) xs bools
   pure reachables

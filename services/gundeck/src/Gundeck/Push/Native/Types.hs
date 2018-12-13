@@ -45,7 +45,7 @@ data Address (s :: Symbol) = Address
     , _addrConn      :: !ConnId
     , _addrClient    :: !ClientId
     }
-  deriving (Eq)
+  deriving (Eq, Ord)
 
 makeLenses ''Address
 
