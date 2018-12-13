@@ -138,7 +138,7 @@ instance Arbitrary (Id a) where
 -- | Handle for a device.  Used mostly by Cannon and Gundeck to identify a websocket connection.
 -- Historically, it is older than 'ClientId' and precedes end-to-end encryption, but it may be
 -- replaced by 'ClientId' at some point in the future.  Unique only together with a 'UserId', stored
--- in Redis, lives as long as the device is connected.
+-- in Redis, lives as long as the device is connected.  See also: 'Presence'.
 newtype ConnId = ConnId
     { fromConnId :: ByteString
     } deriving ( Eq

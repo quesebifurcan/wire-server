@@ -72,8 +72,10 @@ import qualified Data.Set               as Set
 
 data Route
     = RouteAny
-    | RouteDirect
-    | RouteNative
+    | RouteDirect  -- ^ REFACTOR: confirm this hypothesis: 'RouteDirect' messages will still be
+                   -- stored in cassandra, just not trigger notifications.  transient messages are
+                   -- not stored.  decide whether this should rather be a flag in 'Push' below.
+    | RouteNative  -- ^ REFACTOR: this can probably be removed.
     deriving (Eq, Ord, Show)
 
 instance FromJSON Route where

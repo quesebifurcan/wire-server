@@ -121,7 +121,7 @@ instance MonadPushAll Gundeck where
 
 class Monad m => MonadNativeTarget m where
   mntgtLogErr        :: SomeException -> m ()
-  mntgtLookupAddress :: UserId -> m [Address "no-keys"]
+  mntgtLookupAddress :: UserId -> m [Address "no-keys"]  -- ^ REFACTOR: rename to 'mntgtLookupAddresses'!
   mntgtMapAsync      :: (a -> m b) -> [a] -> m [Either SomeException b]
 
 instance MonadNativeTarget Gundeck where
