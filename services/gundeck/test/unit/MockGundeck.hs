@@ -125,9 +125,6 @@ genRecipient = do
 fakePresences :: Recipient -> [Presence]
 fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids
 
-fakeConnId :: ConnId
-fakeConnId = ConnId mempty
-
 fakePresence :: UserId -> ClientId -> Presence
 fakePresence userId (Just -> clientId) = Presence {..}
   where
@@ -135,6 +132,9 @@ fakePresence userId (Just -> clientId) = Presence {..}
     resource  = URI . fromJust $ URI.parseURI "http://example.com"
     createdAt = 0
     __field   = mempty
+
+fakeConnId :: ConnId
+fakeConnId = ConnId mempty
 
 genProtoAddress :: Gen (UserId -> ClientId -> Address "no-keys")
 genProtoAddress = do
@@ -219,15 +219,16 @@ mockListAllPresences
   :: (HasCallStack, m ~ MockGundeck)
   => [UserId] -> m [[Presence]]
 mockListAllPresences uids = do
-  hits :: [(UserId, [Presence])] <- filter ((`elem` uids) . fst) <$> gets (^. mePresences)
-  pure $ snd <$> hits
+  hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> gets (^. meRecipients)
+  pure $ fakePresences <$> hits
 
 mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
   (flip elem -> isreachchable) <- gets (^. meWSReachable)
-  good :: [Presence] <- filter isreachchable . mconcat <$> (snd <$$> gets (^. mePresences))
+  good :: [Presence]
+    <- mconcat . fmap fakePresences . filter isreachchable <$> gets (^. meRecipients)
   pure [ (nid, prcs)
        | (ntfId -> nid, filter (`elem` good) -> prcs) <- notifs
        , not $ null prcs
@@ -252,6 +253,5 @@ mockLookupAddress
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
   (flip Map.lookup -> getaddr) <- gets (^. meNativeAddress)
-  users :: [(UserId, [Presence])] <- gets (^. mePresences)
-  mockprcs :: [Presence] <- maybe (error "user not found!") pure $ lookup uid users
-  pure . catMaybes $ getaddr <$> mockprcs
+  rcps :: [Recipient] <- filter ((== uid) . (^. recipientId)) <$> gets (^. meRecipients)
+  pure . catMaybes $ getaddr <$> rcps

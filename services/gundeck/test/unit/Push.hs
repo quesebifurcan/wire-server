@@ -43,7 +43,7 @@ pushAllProps (Positive len) = mkEnv
     mkEnv = forAll (resize len genMockEnv) mkPushes
 
     mkPushes :: MockEnv -> Property
-    mkPushes env = forAll (resize len $ genPushes (env ^. mePresences)) (prop env)
+    mkPushes env = forAll (resize len $ genPushes (env ^. meRecipients)) (prop env)
 
     prop :: MockEnv -> [Push] -> Property
     prop env pushes = foldl' (.&&.) (once True) props
@@ -56,24 +56,19 @@ pushAllProps (Positive len) = mkEnv
         expectNative = Map.fromList result
           where
             result :: [((UserId, ClientId), Payload)]
-            result = (_1 %~ (\prc -> (userId prc, fromJust $ clientId prc))) <$> reachables
+            result = mconcat $ go <$> withids
+              where
+                go ((uid, cids), pay) = [ ((uid, cid), pay) | cid <- cids ]
 
-            reachables :: [(Presence, Payload)]
-            reachables = filter go prcs
+            withids :: [((UserId, [ClientId]), Payload)]
+            withids = (_1 %~ (\rcp -> (rcp ^. recipientId, rcp ^. recipientClients))) <$> reachables
+
+            reachables :: [(Recipient, Payload)]
+            reachables = filter go rcps
               where
                 go = maybe False (`elem` (env ^. meNativeReachable))
                    . (`Map.lookup` (env ^. meNativeAddress))
                    . fst
-
-            prcs :: [(Presence, Payload)]
-            prcs = mconcat $ go <$> rcps
-              where
-                go :: (Recipient, Payload) -> [(Presence, Payload)]
-                go (rcp, pay) = (, pay) <$> go' rcp
-
-                go' :: Recipient -> [Presence]
-                go' (Recipient uid RouteAny cids) = fakePresence uid <$> cids
-                go' (Recipient _ bad _) = error $ "unexpected route type: " <> show bad
 
             rcps :: [(Recipient, Payload)]
             rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
