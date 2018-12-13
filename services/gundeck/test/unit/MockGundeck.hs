@@ -47,7 +47,7 @@ import qualified Network.URI as URI
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _mePresences       :: [(UserId, [Presence])]
-  , _meNativeAddress   :: [(Presence, Address "no-keys")]  -- TODO: make this a Map?
+  , _meNativeAddress   :: Map Presence (Address "no-keys")
   , _meWSReachable     :: [Presence]  -- TODO: make this Set?
   , _meNativeReachable :: [Address "no-keys"]  -- TODO: make this Set?
   , _meNativeQueue     :: Map NotificationId (UserId, ClientId)
@@ -97,12 +97,15 @@ genMockEnv = do
       len <- choose (length prcs `div` 2, length prcs)
       vectorOf len genProtoAddress
 
-  let _meNativeAddress :: [(Presence, Address "no-keys")]
-      _meNativeAddress = zipWith go prcs protoaddrs
+  let _meNativeAddress :: Map Presence (Address "no-keys")
+      _meNativeAddress = Map.fromList addrs
+
+      addrs :: [(Presence, Address "no-keys")]
+      addrs = zipWith go prcs protoaddrs
         where go prc adr = (prc, adr (userId prc) (fromJust $ clientId prc) (connId prc))
 
   _meWSReachable <- genPredicate prcs
-  _meNativeReachable <- genPredicate (snd <$> _meNativeAddress)
+  _meNativeReachable <- genPredicate (snd <$> addrs)
 
   let _meNativeQueue = mempty
 
@@ -240,7 +243,7 @@ mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  (flip lookup -> getaddr) <- gets (^. meNativeAddress)
+  (flip Map.lookup -> getaddr) <- gets (^. meNativeAddress)
   users :: [(UserId, [Presence])] <- gets (^. mePresences)
   mockprcs :: [Presence] <- maybe (error "user not found!") pure $ lookup uid users
   pure . catMaybes $ getaddr <$> mockprcs

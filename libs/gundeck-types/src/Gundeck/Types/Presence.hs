@@ -21,7 +21,7 @@ data Presence = Presence
     , clientId  :: !(Maybe ClientId)  -- ^ REFACTOR: when is this 'Nothing'?  or can we remove the 'Maybe'?
     , createdAt :: !Milliseconds
     , __field   :: !Lazy.ByteString -- temp. addition to ease migration
-    } deriving (Eq, Show)
+    } deriving (Eq, Ord, Show)
 
 instance ToJSON Presence where
     toJSON p = object
