@@ -43,7 +43,7 @@ pushAllProps (Positive len) = mkEnv
     mkEnv = forAll (resize len genMockEnv) mkPushes
 
     mkPushes :: MockEnv -> Property
-    mkPushes env = forAll (resize len $ genPushes (env ^. meRecipients)) (prop env)
+    mkPushes env = forAllShrink (resize len $ genPushes (env ^. meRecipients)) shrinkPushes (prop env)
 
     prop :: MockEnv -> [Push] -> Property
     prop env pushes = foldl' (.&&.) (once True) props

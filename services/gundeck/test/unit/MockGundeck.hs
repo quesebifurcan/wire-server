@@ -49,7 +49,7 @@ type Payload = List1 Aeson.Object
 data MockEnv = MockEnv
   { _meStdGen          :: StdGen
   , _meRecipients      :: [Recipient]
-  , _meNativeAddress   :: Map Recipient (Address "no-keys")
+  , _meNativeAddress   :: Map UserId (Map ClientId (Address "no-keys"))
   , _meWSReachable     :: Set Recipient
   , _meNativeReachable :: Set (Address "no-keys")
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
@@ -75,12 +75,13 @@ genMockEnv = do
       len <- let l = length _meRecipients in choose (l `div` 2, l)
       vectorOf len genProtoAddress
 
-  let _meNativeAddress :: Map Recipient (Address "no-keys")
-      _meNativeAddress = Map.fromList addrs
-
-      addrs :: [(Recipient, Address "no-keys")]
+  let addrs :: [(Recipient, Address "no-keys")]
       addrs = mconcat $ zipWith go _meRecipients protoaddrs
         where go rcp@(Recipient uid _ cids) adr = (\cid -> (rcp, adr uid cid)) <$> cids
+
+      _meNativeAddress :: Map UserId (Map ClientId (Address "no-keys"))
+      _meNativeAddress = Map.fromList $ (_2 %~ Map.fromList)
+        <$> [ (uid, (, addr) <$> cids) | (Recipient uid _ cids, addr) <- addrs ]
 
   _meWSReachable <- genPredicate _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
@@ -99,7 +100,7 @@ genRecipient :: HasCallStack => Gen Recipient
 genRecipient = do
   uid  <- arbitrary
   cids <- newClientId <$$> arbitrary
-  pure $ Recipient uid RouteAny cids
+  pure $ Recipient uid RouteAny (nub cids)
 
 fakePresences :: Recipient -> [Presence]
 fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids
@@ -126,6 +127,18 @@ genProtoAddress = do
       _addrConn = fakeConnId
   pure $ \_addrUser _addrClient -> Address {..}
 
+shrinkPushes :: [Push] -> [[Push]]
+shrinkPushes = shrinkList shrinkPush
+  where
+    shrinkPush :: Push -> [Push]
+    shrinkPush psh = (\rcps -> psh & pushRecipients .~ rcps) <$> shrinkRecipients (psh ^. pushRecipients)
+
+    shrinkRecipients :: Range 1 1024 (Set Recipient) -> [Range 1 1024 (Set Recipient)]
+    shrinkRecipients = fmap unsafeRange . map Set.fromList . filter (not . null) . shrinkList shrinkRecipient . Set.toList . fromRange
+
+    shrinkRecipient :: Recipient -> [Recipient]
+    shrinkRecipient (Recipient uid route cids) = Recipient uid route <$> shrinkList shrinkNothing cids
+
 genPushes :: [Recipient] -> Gen [Push]
 genPushes = listOf . genPush
 
@@ -136,7 +149,7 @@ genPush allrcps = do
   sender :: UserId <- (^. recipientId) <$> QC.elements allrcps
   rcps :: Range 1 1024 (Set Recipient) <- do
     numrcp <- choose (1, min 1024 (length allrcps))
-    unsafeRange . Set.fromList <$> vectorOf numrcp (QC.elements allrcps)
+    unsafeRange . Set.fromList . nubBy ((==) `on` (^. recipientId)) <$> vectorOf numrcp (QC.elements allrcps)
   pload <- List1 <$> arbitrary
   pure $ newPush sender rcps pload
 
@@ -231,6 +244,5 @@ mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  (flip Map.lookup -> getaddr) <- gets (^. meNativeAddress)
-  rcps :: [Recipient] <- filter ((== uid) . (^. recipientId)) <$> gets (^. meRecipients)
-  pure . catMaybes $ getaddr <$> rcps
+  getaddr <- gets (^. meNativeAddress)
+  maybe (pure []) (pure . Map.elems) $ Map.lookup uid getaddr
