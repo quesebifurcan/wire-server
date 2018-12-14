@@ -24,6 +24,7 @@ import Data.List1
 import Data.Misc ((<$$>))
 import Data.Range
 import Data.String.Conversions
+import Data.UUID ()
 import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
 import Gundeck.Push
@@ -100,9 +101,17 @@ genPredicate xs = Set.fromList <$> do
 
 genRecipient :: HasCallStack => Gen Recipient
 genRecipient = do
-  uid  <- arbitrary
-  cids <- newClientId <$$> arbitrary
-  pure $ Recipient uid RouteAny (nub cids)
+  uid  <- genUserId
+  cids <- listOf1 genClientId
+  pure $ Recipient uid RouteAny cids
+
+genUserId :: Gen UserId
+genUserId = do
+  gen <- mkStdGen <$> resize 100 arbitrary
+  pure . Id . fst $ random gen
+
+genClientId :: Gen ClientId
+genClientId = newClientId <$> resize 50 arbitrary
 
 fakePresences :: Recipient -> [Presence]
 fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids

@@ -74,8 +74,9 @@ data Route
     = RouteAny
     | RouteDirect  -- ^ REFACTOR: 'RouteDirect' messages will still be stored in cassandra, just not
                    -- trigger native push notifications.  transient messages are not stored.  decide
-                   -- whether this should rather be a flag in 'Push' below.  => no, now there is no
-                   -- direct use case but don't remove it.
+                   -- whether this should rather be a flag in 'Push' below.  NO, THIS IS WRONG: "now
+                   -- there is no direct use case but don't remove it."  (TODO: what does that
+                   -- mean?)
     | RouteNative  -- ^ REFACTOR: this can probably be removed.
     deriving (Eq, Ord, Show)
 
@@ -213,7 +214,10 @@ data Push = Push
     , _pushOrigin :: !UserId
       -- ^ Originating user
     , _pushConnections :: !(Set ConnId)
-      -- ^ Destination connections, if a directed push is desired.
+      -- ^ Destination connections, if a directed push is desired.  -- REFACTOR: does this mean if
+      -- the route of a recipient is not RouteDirect, this does not apply?  (if this question
+      -- doesn't make sense: what is the actual meaning of this field?  the comment doesn't make
+      -- sense. :))
     , _pushOriginConnection :: !(Maybe ConnId)
       -- ^ Originating connection, if any.
     , _pushTransient :: !Bool
