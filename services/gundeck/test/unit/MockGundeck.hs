@@ -127,6 +127,9 @@ fakePresence userId (Just -> clientId) = Presence {..}
 fakeConnId :: ClientId -> ConnId
 fakeConnId = ConnId . cs . client
 
+clientIdFromConnId :: ConnId -> ClientId
+clientIdFromConnId = ClientId . cs . fromConnId
+
 genProtoAddress :: Gen (UserId -> ClientId -> Address "no-keys")
 genProtoAddress = do
   _addrTransport <- QC.elements [minBound..]

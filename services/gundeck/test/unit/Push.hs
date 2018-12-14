@@ -53,17 +53,11 @@ pushAllProps (Positive len) = mkEnv
                 ]
 
         expectNative :: Map (UserId, ClientId) Payload
-        expectNative = Map.fromList reachables
+        expectNative = Map.fromList . filter reachable . reformat . fmap removeSelfDevice $ rcps
           where
-            reachables :: [((UserId, ClientId), Payload)]
-            reachables = filter (reachableNative . fst)
-                       . filter (not . reachableWS . fst)
-                       . mconcat
-                       $ go <$> rcps
+            reachable :: ((UserId, ClientId), payload) -> Bool
+            reachable (ids, _) = reachableNative ids && not (reachableWS ids)
               where
-                go :: (Recipient, Payload) -> [((UserId, ClientId), Payload)]
-                go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
-
                 reachableWS :: (UserId, ClientId) -> Bool
                 reachableWS = (`elem` (env ^. meWSReachable))
 
@@ -71,12 +65,22 @@ pushAllProps (Positive len) = mkEnv
                 reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
                   where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
 
-            rcps :: [(Recipient, Payload)]
+            reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
+            reformat = mconcat . fmap go
+              where
+                go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
+
+            removeSelfDevice :: (Maybe ClientId, (Recipient, Payload)) -> (Recipient, Payload)
+            removeSelfDevice (Nothing, good) = good
+            removeSelfDevice (Just sender, (Recipient uid route cids, pay)) =
+              (Recipient uid route $ filter (/= sender) cids, pay)
+
+            rcps :: [(Maybe ClientId, (Recipient, Payload))]
             rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
               where
-                go :: Push -> [(Recipient, Payload)]
-                go push = (,push ^. pushPayload) <$> (Set.toList . fromRange $ push ^. pushRecipients)
-
+                go push = (clientIdFromConnId <$> push ^. pushOriginConnection,)
+                        . (,push ^. pushPayload)
+                      <$> (Set.toList . fromRange $ push ^. pushRecipients)
 
 
       -- TODO: meCassQueue (to be introduced) contains exactly those notifications that are
