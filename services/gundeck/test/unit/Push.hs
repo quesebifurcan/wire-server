@@ -56,7 +56,12 @@ pushAllProps (Positive len) = mkEnv
                 ]
 
         expectNative :: Map (UserId, ClientId) Payload
-        expectNative = Map.fromList . filter reachable . reformat . mconcat . fmap removeSelf $ rcps
+        expectNative = Map.fromList
+                     . filter reachable
+                     . reformat
+                     . mconcat . fmap removeSelf
+                     . fmap (_2 . _1 %~ insertAllClients)
+                     $ rcps
           where
             reachable :: ((UserId, ClientId), payload) -> Bool
             reachable (ids, _) = reachableNative ids && not (reachableWS ids)
@@ -78,6 +83,11 @@ pushAllProps (Positive len) = mkEnv
               [rcp | uid /= uid']
             removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
               [(Recipient uid route $ filter (/= sender) cids, pay)]
+
+            insertAllClients :: Recipient -> Recipient
+            insertAllClients same@(Recipient _ _ (_:_)) = same
+            insertAllClients (Recipient uid route []) = Recipient uid route cids
+              where cids = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
 
             rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
             rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes

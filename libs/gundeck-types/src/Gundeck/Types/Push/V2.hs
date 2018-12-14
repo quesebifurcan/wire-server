@@ -97,7 +97,11 @@ instance ToJSON Route where
 data Recipient = Recipient
     { _recipientId        :: !UserId
     , _recipientRoute     :: !Route
-    , _recipientClients   :: ![ClientId]
+    , _recipientClients   :: ![ClientId]  -- ^ REFACTOR: if the client list is empty, that means
+                                          -- "all clients".  we should make that a @data
+                                          -- RecipientClients = RecipientClientsAll |
+                                          -- RecipientClientsSome [CientId]@ (without changing the
+                                          -- json representation).
     } deriving (Show)
 
 instance Eq Recipient where
