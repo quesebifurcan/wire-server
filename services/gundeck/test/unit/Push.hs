@@ -40,13 +40,16 @@ pushAllProps :: Positive Int -> Property
 pushAllProps (Positive len) = mkEnv
   where
     mkEnv :: Property
-    mkEnv = forAll (resize len genMockEnv) mkPushes
+    mkEnv = forAll (Pretty <$> resize len genMockEnv) mkPushes
 
-    mkPushes :: MockEnv -> Property
-    mkPushes env = forAllShrink (resize len $ genPushes (env ^. meRecipients)) shrinkPushes (prop env)
+    mkPushes :: Pretty MockEnv -> Property
+    mkPushes (Pretty env) = forAllShrink
+      (Pretty <$> resize len (genPushes (env ^. meRecipients)))
+      shrinkPrettyPushes
+      (prop env)
 
-    prop :: MockEnv -> [Push] -> Property
-    prop env pushes = foldl' (.&&.) (once True) props
+    prop :: MockEnv -> Pretty [Push] -> Property
+    prop env (Pretty pushes) = foldl' (.&&.) (once True) props
       where
         ((), env') = runMockGundeck env (pushAll pushes)
         props = [ env' ^. meNativeQueue === expectNative

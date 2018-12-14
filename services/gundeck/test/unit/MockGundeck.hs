@@ -33,12 +33,23 @@ import Gundeck.Types
 import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
+import Text.Show.Pretty (ppShow)
 
 import qualified Data.Aeson.Types as Aeson
 import qualified Data.Set as Set
 import qualified Data.Map as Map
 import qualified Data.Vector as Vector
 import qualified Network.URI as URI
+
+
+----------------------------------------------------------------------
+-- helpers (move to some more general-purpose test library?)
+
+newtype Pretty a = Pretty a
+  deriving (Eq, Ord)
+
+instance Show a => Show (Pretty a) where
+  show (Pretty a) = ppShow a
 
 
 ----------------------------------------------------------------------
@@ -55,6 +66,8 @@ data MockEnv = MockEnv
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
   deriving (Show)
+
+makeLenses ''MockEnv
 
 -- | Generate an environment probabilistically containing the following situations:
 --
@@ -140,6 +153,9 @@ genProtoAddress = do
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
   pure $ \_addrUser _addrClient -> let _addrConn = fakeConnId _addrClient in Address {..}
 
+shrinkPrettyPushes :: Pretty [Push] -> [Pretty [Push]]
+shrinkPrettyPushes (Pretty pushes) = Pretty <$> shrinkPushes pushes
+
 shrinkPushes :: [Push] -> [[Push]]
 shrinkPushes = shrinkList shrinkPush
   where
@@ -182,8 +198,6 @@ instance Arbitrary Aeson.Value where
 
 newtype MockGundeck a = MockGundeck { fromMockGundeck :: StateT MockEnv Identity a }
   deriving (Functor, Applicative, Monad, MonadState MockEnv)
-
-makeLenses 'MockEnv
 
 runMockGundeck :: MockEnv -> MockGundeck a -> (a, MockEnv)
 runMockGundeck env (MockGundeck m) = runIdentity $ runStateT m env

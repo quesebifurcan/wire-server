@@ -66,6 +66,8 @@ newtype Id a = Id
     { toUUID :: UUID
     } deriving (Eq, Ord, Generic, NFData)
 
+-- REFACTOR: non-derived, custom show instances break pretty-show and violate the law
+-- that @show . read == id@.  can we derive Show here?
 instance Show (Id a) where
     show = toString . toUUID
 
