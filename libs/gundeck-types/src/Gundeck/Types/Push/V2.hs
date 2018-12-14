@@ -218,6 +218,12 @@ data Push = Push
       -- the route of a recipient is not RouteDirect, this does not apply?  (if this question
       -- doesn't make sense: what is the actual meaning of this field?  the comment doesn't make
       -- sense. :))
+      --
+      -- "mostly used during calling.  send messages to all devices except the current one."
+      --
+      -- git grep -Hn pushConnections # that on wire-server doesn't show any places where this is
+      -- used.  if the client has no way of setting this, we should get rid of it.
+
     , _pushOriginConnection :: !(Maybe ConnId)
       -- ^ Originating connection, if any.
     , _pushTransient :: !Bool
@@ -231,7 +237,7 @@ data Push = Push
       -- REFACTOR: this make no sense any more since native push notifications have no more payload.
       -- https://github.com/wireapp/wire-server/pull/546
     , _pushNativeAps :: !(Maybe ApsData)
-      -- ^ APNs-specific metadata.
+      -- ^ APNs-specific metadata.  REFACTOR: get rid of this, too?  we don't use this no more.
     , _pushNativePriority :: !Priority
       -- ^ Native push priority.
     , _pushPayload :: !(List1 Object)
