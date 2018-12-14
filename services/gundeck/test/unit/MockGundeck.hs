@@ -15,21 +15,20 @@
 
 module MockGundeck where
 
+import Imports
 import Control.Lens
 import Control.Monad.Catch
-import Control.Monad.Except
 import Control.Monad.State
 import Data.Id
 import Data.List1
-import Data.List1 (List1)
 import Data.Misc ((<$$>))
 import Data.Range
+import Data.String.Conversions
 import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
 import Gundeck.Push
 import Gundeck.Push.Native as Native
 import Gundeck.Types
-import Imports
 import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
@@ -111,13 +110,13 @@ fakePresences (Recipient uid _ cids) = fakePresence uid <$> cids
 fakePresence :: UserId -> ClientId -> Presence
 fakePresence userId (Just -> clientId) = Presence {..}
   where
-    connId    = fakeConnId  -- take clientId
+    connId    = fakeConnId $ fromJust clientId
     resource  = URI . fromJust $ URI.parseURI "http://example.com"
     createdAt = 0
     __field   = mempty
 
-fakeConnId :: ConnId
-fakeConnId = ConnId mempty
+fakeConnId :: ClientId -> ConnId
+fakeConnId = ConnId . cs . client
 
 genProtoAddress :: Gen (UserId -> ClientId -> Address "no-keys")
 genProtoAddress = do
@@ -127,8 +126,7 @@ genProtoAddress = do
       _addrToken = Token "tok"
       _addrEndpoint = Aws.mkSnsArn Tokyo (Account "acc") eptopic
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
-      _addrConn = fakeConnId
-  pure $ \_addrUser _addrClient -> Address {..}
+  pure $ \_addrUser _addrClient -> let _addrConn = fakeConnId _addrClient in Address {..}
 
 shrinkPushes :: [Push] -> [[Push]]
 shrinkPushes = shrinkList shrinkPush

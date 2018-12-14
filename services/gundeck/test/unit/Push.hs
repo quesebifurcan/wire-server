@@ -85,3 +85,7 @@ pushAllProps (Positive len) = mkEnv
       -- TODO: make Web.push mockable and actually receive messages sent over websocket via Chan,
       -- and store them in meWSQueue (to be introduced).  the test that messages expected to go over
       -- websocket actually will.
+
+      -- TODO: test Presences with @ClientId = Nothing@
+
+      -- TODO: test 'Route' more exhaustively.
