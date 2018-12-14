@@ -93,8 +93,19 @@ genMockEnv = do
         where go rcp@(Recipient uid _ cids) adr = (\cid -> (rcp, adr uid cid)) <$> cids
 
       _meNativeAddress :: Map UserId (Map ClientId (Address "no-keys"))
-      _meNativeAddress = Map.fromList $ (_2 %~ Map.fromList)
-        <$> [ (uid, (, addr) <$> cids) | (Recipient uid _ cids, addr) <- addrs ]
+      _meNativeAddress = foldl' go mempty addrs
+        where
+          go :: Map UserId (Map ClientId a)
+             -> (Recipient, a)
+             -> Map UserId (Map ClientId a)
+          go m (Recipient uid _ cids, addr) = Map.alter (go' cids addr) uid m
+
+          go' :: [ClientId]
+              -> a
+              -> Maybe (Map ClientId a)
+              -> Maybe (Map ClientId a)
+          go' cids addr = Just . maybe new (new <>)
+            where new = Map.fromList ((,addr) <$> cids)
 
   _meWSReachable <- genPredicate . mconcat $ recipientToIds <$> _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
