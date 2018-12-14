@@ -64,6 +64,8 @@ data MockEnv = MockEnv
   , _meNativeAddress   :: Map UserId (Map ClientId (Address "no-keys"))
   , _meWSReachable     :: Set (UserId, ClientId)
   , _meNativeReachable :: Set (Address "no-keys")
+    -- TODO: the above fields will not change in MockGundeck, so they could be moved to a
+    -- ReadOnlyMockEnv that is stored in a Reader monad.
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
   deriving (Show)
@@ -265,18 +267,17 @@ mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
-  filterReachables :: [Recipient] -> [Recipient] <- do
-    -- remove all clients that are not reachable from all recipients.  remove recpients without
-    -- clients from output list.
-    reachables <- gets (^. meWSReachable)
-    let go = filter (not . null . (^. recipientClients))
-           . fmap (\(Recipient uid route cids) -> Recipient uid route $ filter ((`elem` reachables) . (uid,)) cids)
-    pure go
-  good :: [Presence]
-    <- mconcat . fmap fakePresences . filterReachables <$> gets (^. meRecipients)
+  env <- get
+
+  let isreachable :: Presence -> Bool
+      isreachable prc = (userId prc, fromJust $ clientId prc) `elem` (env ^. meWSReachable)
+
+      delivered :: [Presence]
+      delivered = filter isreachable . mconcat . fmap fakePresences $ env ^. meRecipients
+
   pure [ (nid, prcs)
-       | (ntfId -> nid, filter (`elem` good) -> prcs) <- notifs
-       , not $ null prcs
+       | (ntfId -> nid, filter (`elem` delivered) -> prcs) <- notifs
+       , not $ null prcs  -- (sic!) (this is what gundeck currently does)
        ]
 
 -- | persisting notification is not needed for the tests at the moment, so we do nothing here.

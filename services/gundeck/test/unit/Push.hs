@@ -76,12 +76,12 @@ pushAllProps (Positive len) = mkEnv
             reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
             reformat = mconcat . fmap go
               where
-                go (Recipient uid _ cids{- may be [] -}, pay) = (\cid -> ((uid, cid), pay)) <$> cids
+                go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
             removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
-            removeSelf ((_, Nothing), rcp@(Recipient _ _ (_:_), _)) =
-              [rcp]
-            removeSelf ((_, Just sender), (Recipient uid route cids@(_:_), pay)) =
+            removeSelf ((_, Nothing), same@(Recipient _ _ _, _)) =
+              [same]
+            removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
               [(Recipient uid route $ filter (/= sender) cids, pay)]
 
             insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
