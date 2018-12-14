@@ -18,6 +18,7 @@ module MockGundeck where
 import Imports
 import Control.Lens
 import Control.Monad.Catch
+import Control.Monad.Except
 import Control.Monad.State
 import Data.Id
 import Data.List1
@@ -93,26 +94,33 @@ genMockEnv = do
         where go rcp@(Recipient uid _ cids) adr = (\cid -> (rcp, adr uid cid)) <$> cids
 
       _meNativeAddress :: Map UserId (Map ClientId (Address "no-keys"))
-      _meNativeAddress = foldl' go mempty addrs
+      _meNativeAddress = foldl' go mempty (snd <$> addrs)
         where
-          go :: Map UserId (Map ClientId a)
-             -> (Recipient, a)
-             -> Map UserId (Map ClientId a)
-          go m (Recipient uid _ cids, addr) = Map.alter (go' cids addr) uid m
+          go :: Map UserId (Map ClientId (Address "no-keys"))
+             -> Address "no-keys"
+             -> Map UserId (Map ClientId (Address "no-keys"))
+          go m addr = Map.alter (go' addr) (addr ^. addrUser) m
 
-          go' :: [ClientId]
-              -> a
-              -> Maybe (Map ClientId a)
-              -> Maybe (Map ClientId a)
-          go' cids addr = Just . maybe new (new <>)
-            where new = Map.fromList ((,addr) <$> cids)
+          go' :: Address "no-keys"
+              -> Maybe (Map ClientId (Address "no-keys"))
+              -> Maybe (Map ClientId (Address "no-keys"))
+          go' addr = Just . maybe new (new <>)
+            where new = Map.fromList [(addr ^. addrClient, addr)]
 
   _meWSReachable <- genPredicate . mconcat $ recipientToIds <$> _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
 
   let _meNativeQueue = mempty
+      env = MockEnv {..}
 
-  pure MockEnv {..}
+  validateMockEnv env & either error (const $ pure env)
+
+validateMockEnv :: MockEnv -> Either String ()
+validateMockEnv env = do
+  forM_ (Map.toList $ env ^. meNativeAddress) $ \(uid, el) -> do
+    forM_ (Map.toList el) $ \(cid, adr) -> do
+      unless (uid == adr ^. addrUser && cid == adr ^. addrClient) $ do
+        throwError (show (uid, cid, adr))
 
 recipientToIds :: Recipient -> [(UserId, ClientId)]
 recipientToIds (Recipient uid _ cids) = (uid,) <$> cids
