@@ -189,7 +189,8 @@ runMockGundeck :: MockEnv -> MockGundeck a -> (a, MockEnv)
 runMockGundeck env (MockGundeck m) = runIdentity $ runStateT m env
 
 instance MonadThrow MockGundeck where
-  throwM = error . show  -- (this is the bad kind of lazy, yes.)
+  throwM = error . show  -- (we are not expecting any interesting errors in these tests, so we might
+                         -- as well crash badly here, as long as it doesn't go unnoticed...)
 
 instance MonadPushAll MockGundeck where
   mpaNotificationTTL = pure $ NotificationTTL 300  -- (longer than we want any test to take.)

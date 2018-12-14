@@ -53,7 +53,7 @@ pushAllProps (Positive len) = mkEnv
                 ]
 
         expectNative :: Map (UserId, ClientId) Payload
-        expectNative = Map.fromList . filter reachable . reformat . fmap removeSelfDevice $ rcps
+        expectNative = Map.fromList . filter reachable . reformat . mconcat . fmap removeSelf $ rcps
           where
             reachable :: ((UserId, ClientId), payload) -> Bool
             reachable (ids, _) = reachableNative ids && not (reachableWS ids)
@@ -70,15 +70,16 @@ pushAllProps (Positive len) = mkEnv
               where
                 go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
-            removeSelfDevice :: (Maybe ClientId, (Recipient, Payload)) -> (Recipient, Payload)
-            removeSelfDevice (Nothing, good) = good
-            removeSelfDevice (Just sender, (Recipient uid route cids, pay)) =
-              (Recipient uid route $ filter (/= sender) cids, pay)
+            removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
+            removeSelf ((uid, Nothing), rcp@(Recipient uid' _ _, _)) =
+              [rcp | uid /= uid']
+            removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
+              [(Recipient uid route $ filter (/= sender) cids, pay)]
 
-            rcps :: [(Maybe ClientId, (Recipient, Payload))]
+            rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
             rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
               where
-                go push = (clientIdFromConnId <$> push ^. pushOriginConnection,)
+                go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
                         . (,push ^. pushPayload)
                       <$> (Set.toList . fromRange $ push ^. pushRecipients)
 
