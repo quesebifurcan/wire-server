@@ -60,7 +60,7 @@ pushAllProps (Positive len) = mkEnv
                      . filter reachable
                      . reformat
                      . mconcat . fmap removeSelf
-                     . fmap (_2 . _1 %~ insertAllClients)
+                     . mconcat . fmap insertAllClients
                      $ rcps
           where
             reachable :: ((UserId, ClientId), payload) -> Bool
@@ -84,9 +84,20 @@ pushAllProps (Positive len) = mkEnv
             removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
               [(Recipient uid route $ filter (/= sender) cids, pay)]
 
-            insertAllClients :: Recipient -> Recipient
-            insertAllClients same@(Recipient _ _ (_:_)) = same
-            insertAllClients (Recipient uid route []) = Recipient uid route cids
+            insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
+                             -> [((UserId, Maybe ClientId), (Recipient, Payload))]
+            -- if sender and receiver are identical and own device in push is not set and the
+            -- recipient client list is empty, send to no device.
+            insertAllClients ((sender, Nothing), (Recipient receiver _ [], _)) | sender == receiver = []
+            -- if the recipient client list is empty, but own device in push is set or sender and
+            -- receiver differ, send to all devices except own device.
+            insertAllClients (same@_, (rcp@(Recipient _ _ []), pay)) = [(same, (insertAllClients' rcp, pay))]
+            -- otherwise, no special hidden meaning.
+            insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
+
+            insertAllClients' :: Recipient -> Recipient
+            insertAllClients' same@(Recipient _ _ (_:_)) = same
+            insertAllClients' (Recipient uid route []) = Recipient uid route cids
               where cids = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
 
             rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
