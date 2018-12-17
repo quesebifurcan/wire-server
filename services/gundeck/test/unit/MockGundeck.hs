@@ -109,8 +109,8 @@ genMockEnv = do
           go' :: Address "no-keys"
               -> Maybe (Map ClientId (Address "no-keys"))
               -> Maybe (Map ClientId (Address "no-keys"))
-          go' addr = Just . maybe new (new <>)
-            where new = Map.fromList [(addr ^. addrClient, addr)]
+          go' addr = Just . maybe newEntries (newEntries <>)
+            where newEntries = Map.fromList [(addr ^. addrClient, addr)]
 
   _meWSReachable <- genPredicate . mconcat $ recipientToIds <$> _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
@@ -177,8 +177,8 @@ genProtoAddress = do
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
   pure $ \_addrUser _addrClient -> let _addrConn = fakeConnId _addrClient in Address {..}
 
-shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
-shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
+genPushes :: [Recipient] -> Gen [Push]
+genPushes = listOf . genPush
 
 shrinkPushes :: [Push] -> [[Push]]
 shrinkPushes = shrinkList shrinkPush
@@ -192,8 +192,8 @@ shrinkPushes = shrinkList shrinkPush
     shrinkRecipient :: Recipient -> [Recipient]
     shrinkRecipient _ = []  --  (Recipient uid route cids) = Recipient uid route <$> shrinkList shrinkNothing cids
 
-genPushes :: [Recipient] -> Gen [Push]
-genPushes = listOf . genPush
+shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
+shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
 
 -- | REFACTOR: What 'Route's are we still using, and what for?  This code is currently only testing
 -- 'RouteAny'.
@@ -223,14 +223,14 @@ instance Arbitrary Aeson.Value where
 genNotif :: Gen Notification
 genNotif = Notification <$> genId <*> arbitrary <*> genPayload
 
-shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
-shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)
-
 genNotifs :: [Recipient] -> Gen [(Notification, [Presence])]
 genNotifs (mconcat . fmap fakePresences -> allprcs) = listOf $ do
   notif <- genNotif
   prcs <- listOf $ QC.elements allprcs
   pure (notif, prcs)
+
+shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
+shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)
 
 
 ----------------------------------------------------------------------
