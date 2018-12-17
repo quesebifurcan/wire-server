@@ -18,6 +18,7 @@ import Control.Lens
 import Data.Id
 import Data.Range
 import Gundeck.Push (pushAll)
+import Gundeck.Push.Websocket as Web (bulkPush)
 import Gundeck.Types
 import Imports
 import MockGundeck
@@ -32,10 +33,28 @@ import qualified Data.Set as Set
 
 tests :: TestTree
 tests = testGroup "PushAll"
-    [ testProperty "works" pushAllProps
+    [ testProperty "web sockets" webBulkPushProps
+    , testProperty "native pushes" pushAllProps
     ]
 
--- | NB: shrinking is not implemented yet.
+
+webBulkPushProps :: Positive Int -> Property
+webBulkPushProps (Positive len) = mkEnv
+  where
+    mkEnv :: Property
+    mkEnv = forAll (Pretty <$> resize len genMockEnv) mkPushes
+
+    mkPushes :: Pretty MockEnv -> Property
+    mkPushes (Pretty env) = forAllShrink
+      (Pretty <$> resize len (genNotifs (env ^. meRecipients)))
+      (shrinkPretty shrinkNotifs)
+      (prop env)
+
+    prop :: MockEnv -> Pretty [(Notification, [Presence])] -> Property
+    prop env (Pretty notifs) = (fst . runMockGundeck env $ Web.bulkPush notifs)
+                           === (fst . runMockGundeck env $ mockBulkPush notifs)
+
+
 pushAllProps :: Positive Int -> Property
 pushAllProps (Positive len) = mkEnv
   where
@@ -45,7 +64,7 @@ pushAllProps (Positive len) = mkEnv
     mkPushes :: Pretty MockEnv -> Property
     mkPushes (Pretty env) = forAllShrink
       (Pretty <$> resize len (genPushes (env ^. meRecipients)))
-      shrinkPrettyPushes
+      (shrinkPretty shrinkPushes)
       (prop env)
 
     prop :: MockEnv -> Pretty [Push] -> Property

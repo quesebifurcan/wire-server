@@ -22,7 +22,7 @@ import Control.Monad.Except
 import Control.Monad.State
 import Data.Id
 import Data.List1
-import Data.Misc ((<$$>))
+import Data.Misc ((<$$>), Milliseconds(Ms))
 import Data.Range
 import Data.String.Conversions
 import Data.UUID ()
@@ -30,8 +30,11 @@ import Gundeck.Aws.Arn as Aws
 import Gundeck.Options
 import Gundeck.Push
 import Gundeck.Push.Native as Native
+import Gundeck.Push.Websocket as Web
 import Gundeck.Types
+import Gundeck.Types.BulkPush
 import System.Random
+import System.Logger.Class as Log
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
 import Text.Show.Pretty (ppShow)
@@ -174,8 +177,8 @@ genProtoAddress = do
       eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
   pure $ \_addrUser _addrClient -> let _addrConn = fakeConnId _addrClient in Address {..}
 
-shrinkPrettyPushes :: Pretty [Push] -> [Pretty [Push]]
-shrinkPrettyPushes (Pretty pushes) = Pretty <$> shrinkPushes pushes
+shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
+shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
 
 shrinkPushes :: [Push] -> [[Push]]
 shrinkPushes = shrinkList shrinkPush
@@ -187,7 +190,7 @@ shrinkPushes = shrinkList shrinkPush
     shrinkRecipients = fmap unsafeRange . map Set.fromList . filter (not . null) . shrinkList shrinkRecipient . Set.toList . fromRange
 
     shrinkRecipient :: Recipient -> [Recipient]
-    shrinkRecipient (Recipient uid route cids) = Recipient uid route <$> shrinkList shrinkNothing cids
+    shrinkRecipient _ = []  --  (Recipient uid route cids) = Recipient uid route <$> shrinkList shrinkNothing cids
 
 genPushes :: [Recipient] -> Gen [Push]
 genPushes = listOf . genPush
@@ -200,8 +203,12 @@ genPush allrcps = do
   rcps :: Range 1 1024 (Set Recipient) <- do
     numrcp <- choose (1, min 1024 (length allrcps))
     unsafeRange . Set.fromList . nubBy ((==) `on` (^. recipientId)) <$> vectorOf numrcp (QC.elements allrcps)
-  pload <- List1 <$> arbitrary
+                  -- TODO: sometimes we only want to send to some clients?  currently we always send to all explicitly
+  pload <- genPayload
   pure $ newPush sender rcps pload
+
+genPayload :: Gen Payload
+genPayload = List1 <$> arbitrary
 
 instance Arbitrary Aeson.Value where
   arbitrary = oneof
@@ -212,6 +219,18 @@ instance Arbitrary Aeson.Value where
     , Aeson.Bool <$> QC.elements [minBound..]
     , pure Aeson.Null
     ]
+
+genNotif :: Gen Notification
+genNotif = Notification <$> arbitrary <*> arbitrary <*> genPayload
+
+shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
+shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)
+
+genNotifs :: [Recipient] -> Gen [(Notification, [Presence])]
+genNotifs (mconcat . fmap fakePresences -> allprcs) = listOf $ do
+  notif <- genNotif
+  prcs <- listOf $ QC.elements allprcs
+  pure (notif, prcs)
 
 
 ----------------------------------------------------------------------
@@ -242,6 +261,16 @@ instance MonadNativeTarget MockGundeck where
   mntgtLookupAddress = mockLookupAddress
   mntgtMapAsync f xs = Right <$$> mapM f xs  -- (no concurrency)
 
+instance MonadBulkPush MockGundeck where
+  mbpBulkSend = mockBulkSend
+  mbpDeleteAllPresences _ = pure ()  -- TODO: test presence deletion logic
+  mbpPosixTime = pure $ Ms 1545045904275  -- (time is constant)
+  mbpMapConcurrently = mapM  -- (no concurrency)
+  mbpMonitorBadCannons _ = pure ()  -- (no monitoring)
+
+instance Log.MonadLogger MockGundeck where
+  log _ _ = pure ()  -- (no logging)
+
 
 ----------------------------------------------------------------------
 -- monad implementation
@@ -263,6 +292,7 @@ mockListAllPresences uids = do
   hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> gets (^. meRecipients)
   pure $ fakePresences <$> hits
 
+-- fake implementation of 'Web.bulkPush'
 mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
@@ -300,3 +330,21 @@ mockLookupAddress
 mockLookupAddress uid = do
   getaddr <- gets (^. meNativeAddress)
   maybe (pure []) (pure . Map.elems) $ Map.lookup uid getaddr
+
+mockBulkSend
+  :: (HasCallStack, m ~ MockGundeck)
+  => URI -> BulkPushRequest
+  -> m (URI, Either SomeException BulkPushResponse)
+mockBulkSend uri (flattenBulkPushRequest -> notifs) = do
+  reachables :: Set PushTarget
+    <- Set.map (uncurry PushTarget . (_2 %~ fakeConnId)) <$> gets (^. meWSReachable)
+  let getstatus trgt = if trgt `Set.member` reachables
+                       then PushStatusOk
+                       else PushStatusGone
+
+  pure . (uri,) . Right $ BulkPushResponse
+    [ (nid, trgt, getstatus trgt) | (nid, trgt) <- notifs ]
+
+flattenBulkPushRequest :: BulkPushRequest -> [(NotificationId, PushTarget)]
+flattenBulkPushRequest (BulkPushRequest notifs) =
+  mconcat $ (\(notif, trgts) -> (ntfId notif,) <$> trgts) <$> notifs
