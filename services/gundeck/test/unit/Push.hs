@@ -42,10 +42,10 @@ webBulkPushProps :: Positive Int -> Property
 webBulkPushProps (Positive len) = mkEnv
   where
     mkEnv :: Property
-    mkEnv = forAll (Pretty <$> resize len genMockEnv) mkPushes
+    mkEnv = forAllShrink (Pretty <$> resize len genMockEnv) (shrinkPretty shrinkMockEnv) mkNotifs
 
-    mkPushes :: Pretty MockEnv -> Property
-    mkPushes (Pretty env) = forAllShrink
+    mkNotifs :: Pretty MockEnv -> Property
+    mkNotifs (Pretty env) = forAllShrink
       (Pretty <$> resize len (genNotifs (env ^. meRecipients)))
       (shrinkPretty shrinkNotifs)
       (prop env)
@@ -59,7 +59,7 @@ pushAllProps :: Positive Int -> Property
 pushAllProps (Positive len) = mkEnv
   where
     mkEnv :: Property
-    mkEnv = forAll (Pretty <$> resize len genMockEnv) mkPushes
+    mkEnv = forAllShrink (Pretty <$> resize len genMockEnv) (shrinkPretty shrinkMockEnv) mkPushes
 
     mkPushes :: Pretty MockEnv -> Property
     mkPushes (Pretty env) = forAllShrink

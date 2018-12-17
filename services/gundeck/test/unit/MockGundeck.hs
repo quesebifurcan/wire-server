@@ -40,8 +40,10 @@ import Test.QuickCheck.Instances ()
 import Text.Show.Pretty (ppShow)
 
 import qualified Data.Aeson.Types as Aeson
-import qualified Data.Set as Set
+import qualified Data.HashMap.Lazy as HashMap
+import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
+import qualified Data.Set as Set
 import qualified Data.Vector as Vector
 import qualified Network.URI as URI
 
@@ -120,6 +122,28 @@ genMockEnv = do
 
   validateMockEnv env & either error (const $ pure env)
 
+shrinkMockEnv :: MockEnv -> [MockEnv]
+shrinkMockEnv env = do
+  rcps :: [Recipient] <- shrinkList (const []) (env ^. meRecipients)
+
+  let env' :: MockEnv
+      env' = env
+        & meRecipients .~ rcps
+        & meNativeAddress %~ naddrs
+        & meWSReachable %~ wsrchbl
+        & meNativeReachable %~ ntrchbl
+
+      clients :: Set (UserId, ClientId)
+      clients = Set.fromList . mconcat $ (\(Recipient uid _ cids) -> (uid,) <$> cids) <$> rcps
+
+      naddrs  = Map.filterWithKey (\uid _ -> uid `Set.member` (fst `Set.map` clients))
+              . fmap (Map.filterWithKey (\cid _ -> cid `Set.member` (snd `Set.map` clients)))
+      wsrchbl = Set.filter (`Set.member` clients)
+      ntrchbl = Set.filter (`Set.member` flatten (env' ^. meNativeAddress))
+        where flatten = Set.fromList . mconcat . Map.elems . fmap Map.elems
+
+  [env' | not $ null rcps]
+
 validateMockEnv :: MockEnv -> Either String ()
 validateMockEnv env = do
   forM_ (Map.toList $ env ^. meNativeAddress) $ \(uid, el) -> do
@@ -190,7 +214,7 @@ shrinkPushes = shrinkList shrinkPush
     shrinkRecipients = fmap unsafeRange . map Set.fromList . filter (not . null) . shrinkList shrinkRecipient . Set.toList . fromRange
 
     shrinkRecipient :: Recipient -> [Recipient]
-    shrinkRecipient _ = []  --  (Recipient uid route cids) = Recipient uid route <$> shrinkList shrinkNothing cids
+    shrinkRecipient _ = []
 
 shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
 shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
@@ -208,9 +232,12 @@ genPush allrcps = do
   pure $ newPush sender rcps pload
 
 genPayload :: Gen Payload
-genPayload = List1 <$> arbitrary
+genPayload = do
+  num :: Int <- arbitrary
+  pure $ List1 (HashMap.singleton "val" (Aeson.toJSON num) NE.:| [])
 
 instance Arbitrary Aeson.Value where
+  -- (not currently in use; 'genPayload' is built to be more compact.)
   arbitrary = oneof
     [ Aeson.object <$> listOf ((Aeson..=) <$> arbitrary <*> (scale (`div` 3) (arbitrary @Aeson.Value)))
     , Aeson.Array . Vector.fromList <$> listOf (scale (`div` 3) (arbitrary @Aeson.Value))
@@ -224,10 +251,12 @@ genNotif :: Gen Notification
 genNotif = Notification <$> genId <*> arbitrary <*> genPayload
 
 genNotifs :: [Recipient] -> Gen [(Notification, [Presence])]
-genNotifs (mconcat . fmap fakePresences -> allprcs) = listOf $ do
+genNotifs (mconcat . fmap fakePresences -> allprcs) = fmap uniqNotifs . listOf $ do
   notif <- genNotif
   prcs <- listOf $ QC.elements allprcs
   pure (notif, prcs)
+  where
+    uniqNotifs = nubBy ((==) `on` (ntfId . fst)) . fmap (_2 %~ nub)
 
 shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
 shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)
