@@ -138,12 +138,12 @@ genPredicate xs = Set.fromList <$> do
 
 genRecipient :: HasCallStack => Gen Recipient
 genRecipient = do
-  uid  <- genUserId
+  uid  <- genId
   cids <- listOf1 genClientId
   pure $ Recipient uid RouteAny cids
 
-genUserId :: Gen UserId
-genUserId = do
+genId :: Gen (Id a)
+genId = do
   gen <- mkStdGen <$> resize 100 arbitrary
   pure . Id . fst $ random gen
 
@@ -221,7 +221,7 @@ instance Arbitrary Aeson.Value where
     ]
 
 genNotif :: Gen Notification
-genNotif = Notification <$> arbitrary <*> arbitrary <*> genPayload
+genNotif = Notification <$> genId <*> arbitrary <*> genPayload
 
 shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
 shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)

@@ -96,8 +96,8 @@ bulkPush notifs = do
 
 -- | log all cannons with response status @/= 200@.
 monitorBadCannons :: (MonadIO m, MonadReader Env m)
-               => (URI, (SomeException, [Presence])) -> m ()
-monitorBadCannons (uri, (err, prcs)) = do
+               => (uri, (error, [Presence])) -> m ()
+monitorBadCannons (_uri, (_err, prcs)) = do
     view monitor >>= Metrics.counterAdd (fromIntegral $ length prcs)
         (Metrics.path "push.ws.unreachable")
 
