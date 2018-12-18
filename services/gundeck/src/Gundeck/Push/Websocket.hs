@@ -58,6 +58,8 @@ instance MonadBulkPush Gundeck where
 
 -- | Send a 'Notification's to associated 'Presence's.  Send at most one request to each Cannon.
 -- Return the lists of 'Presence's successfully reached for each resp. 'Notification'.
+-- If a 'Notification' has been successfully delivered to all presences, it is removed from the
+-- return list (no native pushes needed, so no need to even mention it).
 bulkPush :: forall m. MonadBulkPush m => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
   -- REFACTOR: make presences lists (and notification list) non-empty where applicable?  are there
   -- better types to express more of our semantics / invariants?  (what about duplicates in presence
