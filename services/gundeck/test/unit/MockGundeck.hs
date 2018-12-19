@@ -489,17 +489,14 @@ mockListAllPresences uids = do
   hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> asks (^. meRecipients)
   pure $ fakePresences <$> hits
 
--- fake implementation of 'Web.bulkPush'
+-- | Fake implementation of 'Web.bulkPush'.
 mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
   env <- ask
 
-  let isreachable :: Presence -> Bool
-      isreachable prc = (userId prc, fromJust $ clientId prc) `elem` (env ^. meWSReachable)
-
-      delivered :: [(Notification, [Presence])]
+  let delivered :: [(Notification, [Presence])]
       delivered =  [ (nid, prcs)
                    | (nid, filter (`elem` deliveredprcs) -> prcs) <- notifs
                    , not $ null prcs  -- (sic!) (this is what gundeck currently does)
@@ -507,6 +504,9 @@ mockBulkPush notifs = do
 
       deliveredprcs :: [Presence]
       deliveredprcs = filter isreachable . mconcat . fmap fakePresences $ env ^. meRecipients
+
+      isreachable :: Presence -> Bool
+      isreachable prc = (userId prc, fromJust $ clientId prc) `elem` (env ^. meWSReachable)
 
   forM_ delivered $ \(notif, prcs) -> do
     forM_ prcs $ \prc -> do
