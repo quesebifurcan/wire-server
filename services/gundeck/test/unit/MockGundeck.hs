@@ -1,5 +1,6 @@
 {-# LANGUAGE DataKinds                  #-}
 {-# LANGUAGE FlexibleContexts           #-}
+{-# LANGUAGE FlexibleInstances          #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
@@ -9,6 +10,7 @@
 {-# LANGUAGE TemplateHaskell            #-}
 {-# LANGUAGE TupleSections              #-}
 {-# LANGUAGE TypeApplications           #-}
+{-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE ViewPatterns               #-}
 
 {-# OPTIONS_GHC -Wno-incomplete-patterns -Wno-orphans #-}
@@ -20,6 +22,7 @@ import Control.Lens
 import Control.Monad.Catch
 import Control.Monad.Except
 import Control.Monad.State
+import Data.Aeson
 import Data.Id
 import Data.List1
 import Data.Misc ((<$$>), Milliseconds(Ms))
@@ -33,13 +36,13 @@ import Gundeck.Push.Native as Native
 import Gundeck.Push.Websocket as Web
 import Gundeck.Types
 import Gundeck.Types.BulkPush
-import System.Random
 import System.Logger.Class as Log
+import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
-import Text.Show.Pretty (ppShow)
 
-import qualified Data.Aeson.Types as Aeson
+import qualified Data.Aeson as Aeson
+import qualified Data.Aeson.Encode.Pretty as Aeson
 import qualified Data.HashMap.Lazy as HashMap
 import qualified Data.List.NonEmpty as NE
 import qualified Data.Map as Map
@@ -51,11 +54,13 @@ import qualified Network.URI as URI
 ----------------------------------------------------------------------
 -- helpers (move to some more general-purpose test library?)
 
+-- | (it may be possible to drop this type in favor of more sophisticated use of quickcheck's
+-- counterexample.)
 newtype Pretty a = Pretty a
   deriving (Eq, Ord)
 
-instance Show a => Show (Pretty a) where
-  show (Pretty a) = ppShow a
+instance Aeson.ToJSON a => Show (Pretty a) where
+  show (Pretty a) = cs $ Aeson.encodePretty a
 
 
 ----------------------------------------------------------------------
@@ -73,9 +78,65 @@ data MockEnv = MockEnv
     -- ReadOnlyMockEnv that is stored in a Reader monad.
   , _meNativeQueue     :: Map (UserId, ClientId) Payload
   }
-  deriving (Show)
+  deriving (Eq, Show)
+
+instance Eq StdGen where
+  (==) = (==) `on` show
 
 makeLenses ''MockEnv
+
+-- (serializing test cases makes replay easier.)
+instance ToJSON MockEnv where
+  toJSON env = object
+    [ "meStdGen"          Aeson..= show (env ^. meStdGen)
+    , "meRecipients"      Aeson..= (env ^. meRecipients)
+    , "meNativeAddress"   Aeson..= Map.toList (Map.toList <$> (env ^. meNativeAddress))
+    , "meWSReachable"     Aeson..= Set.toList (env ^. meWSReachable)
+    , "meNativeReachable" Aeson..= Set.toList (env ^. meNativeReachable)
+    , "meNativeQueue"     Aeson..= Map.toList (env ^. meNativeQueue)
+    ]
+
+instance ToJSON (Address s) where
+  toJSON adr = Aeson.object
+    [ "addrUser"      Aeson..= (adr ^. addrUser)
+    , "addrTransport" Aeson..= (adr ^. addrTransport)
+    , "addrApp"       Aeson..= (adr ^. addrApp)
+    , "addrToken"     Aeson..= (adr ^. addrToken)
+    , "addrEndpoint"  Aeson..= (serializeFakeAddrEndpoint $ adr ^. addrEndpoint)
+    , "addrConn"      Aeson..= (adr ^. addrConn)
+    , "addrClient"    Aeson..= (adr ^. addrClient)
+    ]
+
+serializeFakeAddrEndpoint :: EndpointArn -> (Text, Transport, AppName)
+serializeFakeAddrEndpoint ((^. snsTopic) -> eptopic) =
+  ( case eptopic ^. endpointId of EndpointId txt -> txt
+  , eptopic ^. endpointTransport
+  , eptopic ^. endpointAppName
+  )
+
+instance FromJSON MockEnv where
+  parseJSON = withObject "MockEnv" $ \env -> MockEnv
+    <$> (read <$> (env Aeson..: "meStdGen"))
+    <*> (env Aeson..: "meRecipients")
+    <*> (Map.fromList <$$> (Map.fromList <$> (env Aeson..: "meNativeAddress")))
+    <*> (Set.fromList <$> (env Aeson..: "meWSReachable"))
+    <*> (Set.fromList <$> (env Aeson..: "meNativeReachable"))
+    <*> (Map.fromList <$> (env Aeson..: "meNativeQueue"))
+
+instance FromJSON (Address s) where
+  parseJSON = withObject "Address" $ \adr -> Address
+    <$> (adr Aeson..: "addrUser")
+    <*> (adr Aeson..: "addrTransport")
+    <*> (adr Aeson..: "addrApp")
+    <*> (adr Aeson..: "addrToken")
+    <*> (mkFakeAddrEndpoint <$> adr Aeson..: "addrEndpoint")
+    <*> (adr Aeson..: "addrConn")
+    <*> (adr Aeson..: "addrClient")
+
+mkFakeAddrEndpoint :: (Text, Transport, AppName) -> EndpointArn
+mkFakeAddrEndpoint (epid, transport, app) = Aws.mkSnsArn Tokyo (Account "acc") eptopic
+  where eptopic = mkEndpointTopic (ArnEnv "") transport app (EndpointId epid)
+
 
 -- | Generate an environment probabilistically containing the following situations:
 --
@@ -194,11 +255,10 @@ clientIdFromConnId = ClientId . cs . fromConnId
 genProtoAddress :: Gen (UserId -> ClientId -> Address "no-keys")
 genProtoAddress = do
   _addrTransport <- QC.elements [minBound..]
-  arnEpId <- EndpointId <$> arbitrary
+  arnEpId <- arbitrary
   let _addrApp = "AppName"
       _addrToken = Token "tok"
-      _addrEndpoint = Aws.mkSnsArn Tokyo (Account "acc") eptopic
-      eptopic = mkEndpointTopic (ArnEnv "") _addrTransport _addrApp arnEpId
+      _addrEndpoint = mkFakeAddrEndpoint (arnEpId, _addrTransport, _addrApp)
   pure $ \_addrUser _addrClient -> let _addrConn = fakeConnId _addrClient in Address {..}
 
 genPushes :: [Recipient] -> Gen [Push]

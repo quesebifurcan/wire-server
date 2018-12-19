@@ -2,6 +2,7 @@
 {-# LANGUAGE FlexibleContexts           #-}
 {-# LANGUAGE GADTs                      #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE LambdaCase                 #-}
 {-# LANGUAGE MultiParamTypeClasses      #-}
 {-# LANGUAGE OverloadedStrings          #-}
 {-# LANGUAGE RecordWildCards            #-}
@@ -14,36 +15,61 @@
 
 module Push where
 
+import Imports
 import Control.Lens
 import Data.Id
 import Data.Range
+import Data.String.Conversions (cs)
 import Gundeck.Push (pushAll)
 import Gundeck.Push.Websocket as Web (bulkPush)
 import Gundeck.Types
-import Imports
 import MockGundeck
-import Test.QuickCheck as QC
+import System.FilePath ((</>))
+import Test.QuickCheck
 import Test.QuickCheck.Instances ()
 import Test.Tasty
+import Test.Tasty.HUnit
 import Test.Tasty.QuickCheck
 
+import qualified Data.Aeson as Aeson
+import qualified Data.ByteString.Lazy as LBS
 import qualified Data.Map as Map
 import qualified Data.Set as Set
 
+main :: IO ()
+main = defaultMain tests
 
 tests :: TestTree
-tests = testGroup "PushAll"
+tests = testGroup "bulkpush" $
+    ((\n -> testCase (show n) $ test n) <$> [1..4]) <>
     [ testProperty "web sockets" webBulkPushProps
     , testProperty "native pushes" pushAllProps
     ]
 
 
-webBulkPushProps :: Positive Int -> Property
-webBulkPushProps (Positive len) = mkEnv
-  where
-    mkEnv :: Property
-    mkEnv = forAllShrink (Pretty <$> resize len genMockEnv) (shrinkPretty shrinkMockEnv) mkNotifs
+mkEnv :: (Pretty MockEnv -> Property) -> Positive Int -> Property
+mkEnv prop (Positive len) = forAllShrink (Pretty <$> resize len genMockEnv) (shrinkPretty shrinkMockEnv) prop
 
+
+testRootPath :: FilePath
+testRootPath = "../mock-samples"
+
+test :: Int -> Assertion
+test i = do
+  Just ((env, input) :: (MockEnv, [Push]))
+    <- Aeson.decode <$> LBS.readFile (testRootPath </> show i <> ".json")
+  runProp $ pushAllProp env (Pretty input)
+
+runProp :: Property -> Assertion
+runProp propty = quickCheckWithResult stdArgs { maxSuccess = 1, chatty = False } propty >>= \case
+  Success {} -> pure ()
+  bad@(Failure {}) -> assertBool (intercalate "\n" (failingTestCase bad) <> "\n" <> output bad) False
+  bad -> assertBool (output bad) False
+
+
+webBulkPushProps :: Positive Int -> Property
+webBulkPushProps plen@(Positive len) = mkEnv mkNotifs plen
+  where
     mkNotifs :: Pretty MockEnv -> Property
     mkNotifs (Pretty env) = forAllShrink
       (Pretty <$> resize len (genNotifs (env ^. meRecipients)))
@@ -56,75 +82,70 @@ webBulkPushProps (Positive len) = mkEnv
 
 
 pushAllProps :: Positive Int -> Property
-pushAllProps (Positive len) = mkEnv
+pushAllProps plen@(Positive len) = mkEnv mkPushes plen
   where
-    mkEnv :: Property
-    mkEnv = forAllShrink (Pretty <$> resize len genMockEnv) (shrinkPretty shrinkMockEnv) mkPushes
-
     mkPushes :: Pretty MockEnv -> Property
     mkPushes (Pretty env) = forAllShrink
       (Pretty <$> resize len (genPushes (env ^. meRecipients)))
       (shrinkPretty shrinkPushes)
-      (prop env)
+      (pushAllProp env)
 
-    prop :: MockEnv -> Pretty [Push] -> Property
-    prop env (Pretty pushes) = foldl' (.&&.) (once True) props
+pushAllProp :: MockEnv -> Pretty [Push] -> Property
+pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes))
+                                $ foldl' (.&&.) (once True) props
+  where
+    ((), env') = runMockGundeck env (pushAll pushes)
+    props = [ (Aeson.eitherDecode . Aeson.encode) pushes === Right pushes
+            , (Aeson.eitherDecode . Aeson.encode) env === Right env
+            , env' ^. meNativeQueue === expectNative
+            ]
+
+    expectNative :: Map (UserId, ClientId) Payload
+    expectNative = Map.fromList
+                 . filter reachable
+                 . reformat
+                 . mconcat . fmap removeSelf
+                 . mconcat . fmap insertAllClients
+                 $ rcps
       where
-        ((), env') = runMockGundeck env (pushAll pushes)
-        props = [ env' ^. meNativeQueue === expectNative
-                ]
-
-        expectNative :: Map (UserId, ClientId) Payload
-        expectNative = Map.fromList
-                     . filter reachable
-                     . reformat
-                     . mconcat . fmap removeSelf
-                     . mconcat . fmap insertAllClients
-                     $ rcps
+        reachable :: ((UserId, ClientId), payload) -> Bool
+        reachable (ids, _) = reachableNative ids && not (reachableWS ids)
           where
-            reachable :: ((UserId, ClientId), payload) -> Bool
-            reachable (ids, _) = reachableNative ids && not (reachableWS ids)
-              where
-                reachableWS :: (UserId, ClientId) -> Bool
-                reachableWS = (`elem` (env ^. meWSReachable))
+            reachableWS :: (UserId, ClientId) -> Bool
+            reachableWS = (`elem` (env ^. meWSReachable))
 
-                reachableNative :: (UserId, ClientId) -> Bool
-                reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
-                  where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
+            reachableNative :: (UserId, ClientId) -> Bool
+            reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
+              where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
 
-            reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
-            reformat = mconcat . fmap go
-              where
-                go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
+        reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
+        reformat = mconcat . fmap go
+          where
+            go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
-            removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
-            removeSelf ((_, Nothing), same@(Recipient _ _ _, _)) =
-              [same]
-            removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
-              [(Recipient uid route $ filter (/= sender) cids, pay)]
+        removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
+        removeSelf ((sndr, Nothing), same@(Recipient rcp _ _, _)) =
+          [same | sndr /= rcp]
+        removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
+          [(Recipient uid route $ filter (/= sender) cids, pay)]
 
-            insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
-                             -> [((UserId, Maybe ClientId), (Recipient, Payload))]
-            -- if sender and receiver are identical and own device in push is not set and the
-            -- recipient client list is empty, send to no device.
-            insertAllClients ((sender, Nothing), (Recipient receiver _ [], _)) | sender == receiver = []
-            -- if the recipient client list is empty, but own device in push is set or sender and
-            -- receiver differ, send to all devices except own device.
-            insertAllClients (same@_, (rcp@(Recipient _ _ []), pay)) = [(same, (insertAllClients' rcp, pay))]
-            -- otherwise, no special hidden meaning.
-            insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
+        insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
+                         -> [((UserId, Maybe ClientId), (Recipient, Payload))]
+        -- if the recipient client list is empty, fill in all devices of that user
+        insertAllClients (same@_, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
+          where
+            rcp' = Recipient uid route defaults
+            defaults = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
 
-            insertAllClients' :: Recipient -> Recipient
-            insertAllClients' same@(Recipient _ _ (_:_)) = same
-            insertAllClients' (Recipient uid route []) = Recipient uid route cids
-              where cids = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
+        -- otherwise, no special hidden meaning.
+        insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
 
-            rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
-            rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
-              where
-                go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
-                        . (,push ^. pushPayload)
-                      <$> (Set.toList . fromRange $ push ^. pushRecipients)
+        rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
+        rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
+          where
+            go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
+                    . (,push ^. pushPayload)
+                  <$> (Set.toList . fromRange $ push ^. pushRecipients)
 
 
       -- TODO: meCassQueue (to be introduced) contains exactly those notifications that are
@@ -137,3 +158,6 @@ pushAllProps (Positive len) = mkEnv
       -- TODO: test Presences with @ClientId = Nothing@
 
       -- TODO: test 'Route' more exhaustively.
+
+
+      -- TODO: i think notifications go to sender via websocket right now.  should we turn that off, too?  (write a test)
