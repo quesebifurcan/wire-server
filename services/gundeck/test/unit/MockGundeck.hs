@@ -402,10 +402,10 @@ mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
           -- if originating client is known and pushNativeIncludeOrigin is True, filter out just
           -- that client, and native-push to all other devices of the originator.
           [(Recipient rcpuid route $ filter (/= sndcid) cids, pay)]
-        removeSelf ((snduid, Nothing, True), same@(Recipient rcpuid _ _, _)) =
-          -- if no originating client is given and pushNativeIncludeOrigin is True, do not
-          -- native-push to any devices of the originator.
-          [same | snduid /= rcpuid]
+        removeSelf ((_, Nothing, True), same) =
+          -- if no originating client is given and pushNativeIncludeOrigin is True, push to all
+          -- originating devices.
+          [same]
 
         insertAllClients :: (any, (Recipient, Payload))
                          -> [(any, (Recipient, Payload))]
