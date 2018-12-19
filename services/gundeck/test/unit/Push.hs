@@ -101,8 +101,6 @@ pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes
       -- TODO: test: meCassQueue (to be introduced) contains exactly those notifications that are
       --       non-transient.
 
-      -- TODO: test: meWSQueue (to be introduced contains websocket deliveries.
-
       -- TODO: test Presences with @ClientId = Nothing@
 
       -- TODO: test 'Route' more exhaustively.

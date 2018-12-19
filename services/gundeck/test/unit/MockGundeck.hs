@@ -78,7 +78,7 @@ data MockEnv = MockEnv
 
 data MockState = MockState
   { _msNonRandomGen    :: StdGen
-  , _msWSQueue         :: Map (UserId, ConnId) Payload
+  , _msWSQueue         :: Map (UserId, ClientId) Payload
   , _msNativeQueue     :: Map (UserId, ClientId) Payload
   }
   deriving (Eq, Show)
@@ -248,6 +248,7 @@ fakePresence userId (Just -> clientId) = Presence {..}
     createdAt = 0
     __field   = mempty
 
+-- | TODO: explain why this keeps the distinction between client and connection intact.
 fakeConnId :: ClientId -> ConnId
 fakeConnId = ConnId . cs . client
 
@@ -377,9 +378,34 @@ mockPushAll pushes = do
   modify $ (msWSQueue .~ expectWS env)
          . (msNativeQueue .~ expectNative env)
   where
-    expectWS :: MockEnv -> Map (UserId, ConnId) Payload
+    expectWS :: MockEnv -> Map (UserId, ClientId) Payload
     expectWS env
-      = _
+      = Map.fromList
+      . filter reachable
+      . reformat
+      . mconcat . fmap removeSelf
+      . mconcat . fmap insertAllClients
+      $ rcps
+      where
+        reachable :: ((UserId, ClientId), payload) -> Bool
+        reachable (ids, _) = ids `elem` (env ^. meWSReachable)
+
+        removeSelf :: ((UserId, Maybe ClientId, any), (Recipient, Payload)) -> [(Recipient, Payload)]
+        removeSelf ((_, Nothing, _), same) =
+          [same]
+        removeSelf ((_, Just sndcid, _), (Recipient rcpuid route cids, pay)) =
+          [(Recipient rcpuid route $ filter (/= sndcid) cids, pay)]
+
+        insertAllClients :: (any, (Recipient, Payload))
+                         -> [(any, (Recipient, Payload))]
+        -- if the recipient client list is empty, fill in all devices of that user
+        insertAllClients (same, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
+          where
+            rcp' = Recipient uid route defaults
+            defaults = mconcat [ cids | Recipient uid' _ cids <- env ^. meRecipients, uid' == uid ]
+
+        -- otherwise, no special hidden meaning.
+        insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
 
     expectNative :: MockEnv -> Map (UserId, ClientId) Payload
     expectNative env
@@ -399,11 +425,6 @@ mockPushAll pushes = do
             reachableNative :: (UserId, ClientId) -> Bool
             reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
               where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
-
-        reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
-        reformat = mconcat . fmap go
-          where
-            go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
         removeSelf :: ((UserId, Maybe ClientId, Bool), (Recipient, Payload)) -> [(Recipient, Payload)]
         removeSelf ((snduid, _, False), same@(Recipient rcpuid _ _, _)) =
@@ -426,23 +447,33 @@ mockPushAll pushes = do
           where
             rcp' = Recipient uid route defaults
             defaults = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
-
         -- otherwise, no special hidden meaning.
         insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
 
-        rcps :: [((UserId, Maybe ClientId, Bool), (Recipient, Payload))]
-        rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
-          where
-            go psh = (( psh ^. pushOrigin
-                      , clientIdFromConnId <$> psh ^. pushOriginConnection
-                      , psh ^. pushNativeIncludeOrigin
-                      ),)
-                   . (,psh ^. pushPayload)
-                  <$> (Set.toList . fromRange $ psh ^. pushRecipients)
+    reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
+    reformat = mconcat . fmap go
+      where
+        go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
+
+    rcps :: [((UserId, Maybe ClientId, Bool), (Recipient, Payload))]
+    rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
+      where
+        go :: Push -> [((UserId, Maybe ClientId, Bool), (Recipient, List1 Object))]
+        go psh = do
+          rcp <- Set.toList . fromRange $ psh ^. pushRecipients
+          pure $
+            ( ( psh ^. pushOrigin
+              , clientIdFromConnId <$> psh ^. pushOriginConnection
+              , psh ^. pushNativeIncludeOrigin
+              )
+            , (rcp, psh ^. pushPayload)
+            )
 
 
 -- | (There is certainly a fancier implementation using '<%=' or similar, but this one is easier to
 -- reverse engineer later.)
+--
+-- TODO: we shouldn't even pretend to use randomness here, and just return increasing numbers.
 mockMkNotificationId
   :: (HasCallStack, m ~ MockGundeck)
   => m NotificationId
@@ -479,7 +510,7 @@ mockBulkPush notifs = do
 
   forM_ delivered $ \(notif, prcs) -> do
     forM_ prcs $ \prc -> do
-      modify $ msWSQueue %~ Map.insert (userId prc, connId prc) (ntfPayload notif)
+      modify $ msWSQueue %~ Map.insert (userId prc, clientIdFromConnId $ connId prc) (ntfPayload notif)
 
   pure $ (_1 %~ ntfId) <$> delivered
 
@@ -521,7 +552,7 @@ mockBulkSend uri notifs = do
           mconcat $ (\(ntif, trgts) -> (ntif,) <$> trgts) <$> ntifs
 
   forM_ flat $ \(ntif, ptgt) -> do
-      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, ptConnId ptgt) (ntfPayload ntif)
+      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
 
   pure . (uri,) . Right $ BulkPushResponse
     [ (ntfId ntif, trgt, getstatus trgt) | (ntif, trgt) <- flat ]
