@@ -63,7 +63,7 @@ test i = do
 runProp :: Property -> Assertion
 runProp propty = quickCheckWithResult stdArgs { maxSuccess = 1, chatty = False } propty >>= \case
   Success {} -> pure ()
-  bad@(Failure {}) -> assertBool (intercalate "\n" (failingTestCase bad) <> "\n" <> output bad) False
+  bad@(Failure {}) -> assertBool (intercalate "\n" (failingTestCase bad)) False
   bad -> assertBool (output bad) False
 
 
@@ -94,58 +94,12 @@ pushAllProp :: MockEnv -> Pretty [Push] -> Property
 pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes))
                                 $ foldl' (.&&.) (once True) props
   where
-    ((), env') = runMockGundeck env (pushAll pushes)
+    ((), env')  = runMockGundeck env (pushAll pushes)
+    ((), env'') = runMockGundeck env (mockPushAll pushes)
     props = [ (Aeson.eitherDecode . Aeson.encode) pushes === Right pushes
             , (Aeson.eitherDecode . Aeson.encode) env === Right env
-            , env' ^. meNativeQueue === expectNative
+            , env' ^. meNativeQueue === env'' ^. meNativeQueue
             ]
-
-    expectNative :: Map (UserId, ClientId) Payload
-    expectNative = Map.fromList
-                 . filter reachable
-                 . reformat
-                 . mconcat . fmap removeSelf
-                 . mconcat . fmap insertAllClients
-                 $ rcps
-      where
-        reachable :: ((UserId, ClientId), payload) -> Bool
-        reachable (ids, _) = reachableNative ids && not (reachableWS ids)
-          where
-            reachableWS :: (UserId, ClientId) -> Bool
-            reachableWS = (`elem` (env ^. meWSReachable))
-
-            reachableNative :: (UserId, ClientId) -> Bool
-            reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
-              where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
-
-        reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
-        reformat = mconcat . fmap go
-          where
-            go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
-
-        removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
-        removeSelf ((sndr, Nothing), same@(Recipient rcp _ _, _)) =
-          [same | sndr /= rcp]
-        removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
-          [(Recipient uid route $ filter (/= sender) cids, pay)]
-
-        insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
-                         -> [((UserId, Maybe ClientId), (Recipient, Payload))]
-        -- if the recipient client list is empty, fill in all devices of that user
-        insertAllClients (same@_, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
-          where
-            rcp' = Recipient uid route defaults
-            defaults = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
-
-        -- otherwise, no special hidden meaning.
-        insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
-
-        rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
-        rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
-          where
-            go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
-                    . (,push ^. pushPayload)
-                  <$> (Set.toList . fromRange $ push ^. pushRecipients)
 
 
       -- TODO: meCassQueue (to be introduced) contains exactly those notifications that are

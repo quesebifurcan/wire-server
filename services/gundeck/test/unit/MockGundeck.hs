@@ -364,6 +364,60 @@ instance Log.MonadLogger MockGundeck where
 ----------------------------------------------------------------------
 -- monad implementation
 
+-- | Expected behavior of 'Gundeck.Push.pushAll' (used in the property test).
+mockPushAll
+  :: (HasCallStack, m ~ MockGundeck)
+  => [Push] -> m ()
+mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
+  where
+    expectNative :: MockEnv -> Map (UserId, ClientId) Payload
+    expectNative env = Map.fromList
+                 . filter reachable
+                 . reformat
+                 . mconcat . fmap removeSelf
+                 . mconcat . fmap insertAllClients
+                 $ rcps
+      where
+        reachable :: ((UserId, ClientId), payload) -> Bool
+        reachable (ids, _) = reachableNative ids && not (reachableWS ids)
+          where
+            reachableWS :: (UserId, ClientId) -> Bool
+            reachableWS = (`elem` (env ^. meWSReachable))
+
+            reachableNative :: (UserId, ClientId) -> Bool
+            reachableNative (uid, cid) = maybe False (`elem` (env ^. meNativeReachable)) adr
+              where adr = (Map.lookup uid >=> Map.lookup cid) (env ^. meNativeAddress)
+
+        reformat :: [(Recipient, Payload)] -> [((UserId, ClientId), Payload)]
+        reformat = mconcat . fmap go
+          where
+            go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
+
+        removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
+        removeSelf ((sndr, Nothing), same@(Recipient rcp _ _, _)) =
+          [same | sndr /= rcp]
+        removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
+          [(Recipient uid route $ filter (/= sender) cids, pay)]
+
+        insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
+                         -> [((UserId, Maybe ClientId), (Recipient, Payload))]
+        -- if the recipient client list is empty, fill in all devices of that user
+        insertAllClients (same@_, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
+          where
+            rcp' = Recipient uid route defaults
+            defaults = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
+
+        -- otherwise, no special hidden meaning.
+        insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
+
+        rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
+        rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
+          where
+            go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
+                    . (,push ^. pushPayload)
+                  <$> (Set.toList . fromRange $ push ^. pushRecipients)
+
+
 -- | (There is certainly a fancier implementation using '<%=' or similar, but this one is easier to
 -- reverse engineer later.)
 mockMkNotificationId
@@ -424,16 +478,16 @@ mockBulkSend
   :: (HasCallStack, m ~ MockGundeck)
   => URI -> BulkPushRequest
   -> m (URI, Either SomeException BulkPushResponse)
-mockBulkSend uri (flattenBulkPushRequest -> notifs) = do
+mockBulkSend uri notifs = do
   reachables :: Set PushTarget
     <- Set.map (uncurry PushTarget . (_2 %~ fakeConnId)) <$> gets (^. meWSReachable)
   let getstatus trgt = if trgt `Set.member` reachables
                        then PushStatusOk
                        else PushStatusGone
 
-  pure . (uri,) . Right $ BulkPushResponse
-    [ (nid, trgt, getstatus trgt) | (nid, trgt) <- notifs ]
+      flattenBulkPushRequest :: BulkPushRequest -> [(NotificationId, PushTarget)]
+      flattenBulkPushRequest (BulkPushRequest notifs) =
+        mconcat $ (\(notif, trgts) -> (ntfId notif,) <$> trgts) <$> notifs
 
-flattenBulkPushRequest :: BulkPushRequest -> [(NotificationId, PushTarget)]
-flattenBulkPushRequest (BulkPushRequest notifs) =
-  mconcat $ (\(notif, trgts) -> (ntfId notif,) <$> trgts) <$> notifs
+  pure . (uri,) . Right $ BulkPushResponse
+    [ (nid, trgt, getstatus trgt) | (nid, trgt) <- flattenBulkPushRequest notifs ]
