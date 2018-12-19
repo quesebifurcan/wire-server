@@ -90,11 +90,11 @@ pushAllProp :: MockEnv -> Pretty [Push] -> Property
 pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes))
                                 $ foldl' (.&&.) (once True) props
   where
-    ((), env')  = runMockGundeck env (pushAll pushes)
-    ((), env'') = runMockGundeck env (mockPushAll pushes)
+    ((), realst) = runMockGundeck env (pushAll pushes)
+    ((), mockst) = runMockGundeck env (mockPushAll pushes)
     props = [ (Aeson.eitherDecode . Aeson.encode) pushes === Right pushes
             , (Aeson.eitherDecode . Aeson.encode) env === Right env
-            , env' ^. meNativeQueue === env'' ^. meNativeQueue
+            , realst === mockst
             ]
 
 

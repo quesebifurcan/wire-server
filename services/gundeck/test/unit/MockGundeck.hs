@@ -13,7 +13,7 @@
 {-# LANGUAGE TypeSynonymInstances       #-}
 {-# LANGUAGE ViewPatterns               #-}
 
-{-# OPTIONS_GHC -Wno-incomplete-patterns -Wno-orphans #-}
+{-# OPTIONS_GHC -Wno-orphans #-}
 
 module MockGundeck where
 
@@ -69,14 +69,17 @@ instance Aeson.ToJSON a => Show (Pretty a) where
 type Payload = List1 Aeson.Object
 
 data MockEnv = MockEnv
-  { _meStdGen          :: StdGen
-  , _meRecipients      :: [Recipient]
+  { _meRecipients      :: [Recipient]
   , _meNativeAddress   :: Map UserId (Map ClientId (Address "no-keys"))
   , _meWSReachable     :: Set (UserId, ClientId)
   , _meNativeReachable :: Set (Address "no-keys")
-    -- TODO: the above fields will not change in MockGundeck, so they could be moved to a
-    -- ReadOnlyMockEnv that is stored in a Reader monad.
-  , _meNativeQueue     :: Map (UserId, ClientId) Payload
+  }
+  deriving (Eq, Show)
+
+data MockState = MockState
+  { _msNonRandomGen    :: StdGen
+  , _msWSQueue         :: Map (UserId, ConnId) Payload
+  , _msNativeQueue     :: Map (UserId, ClientId) Payload
   }
   deriving (Eq, Show)
 
@@ -84,16 +87,21 @@ instance Eq StdGen where
   (==) = (==) `on` show
 
 makeLenses ''MockEnv
+makeLenses ''MockState
+
+instance Semigroup MockState where
+  (MockState _ ws nat) <> (MockState gen ws' nat') = MockState gen (ws <> ws') (nat <> nat')
+
+instance Monoid MockState where
+  mempty = MockState (mkStdGen 0) mempty mempty
 
 -- (serializing test cases makes replay easier.)
 instance ToJSON MockEnv where
   toJSON env = object
-    [ "meStdGen"          Aeson..= show (env ^. meStdGen)
-    , "meRecipients"      Aeson..= (env ^. meRecipients)
+    [ "meRecipients"      Aeson..= (env ^. meRecipients)
     , "meNativeAddress"   Aeson..= Map.toList (Map.toList <$> (env ^. meNativeAddress))
     , "meWSReachable"     Aeson..= Set.toList (env ^. meWSReachable)
     , "meNativeReachable" Aeson..= Set.toList (env ^. meNativeReachable)
-    , "meNativeQueue"     Aeson..= Map.toList (env ^. meNativeQueue)
     ]
 
 instance ToJSON (Address s) where
@@ -116,12 +124,10 @@ serializeFakeAddrEndpoint ((^. snsTopic) -> eptopic) =
 
 instance FromJSON MockEnv where
   parseJSON = withObject "MockEnv" $ \env -> MockEnv
-    <$> (read <$> (env Aeson..: "meStdGen"))
-    <*> (env Aeson..: "meRecipients")
+    <$> (env Aeson..: "meRecipients")
     <*> (Map.fromList <$$> (Map.fromList <$> (env Aeson..: "meNativeAddress")))
     <*> (Set.fromList <$> (env Aeson..: "meWSReachable"))
     <*> (Set.fromList <$> (env Aeson..: "meNativeReachable"))
-    <*> (Map.fromList <$> (env Aeson..: "meNativeQueue"))
 
 instance FromJSON (Address s) where
   parseJSON = withObject "Address" $ \adr -> Address
@@ -146,9 +152,6 @@ mkFakeAddrEndpoint (epid, transport, app) = Aws.mkSnsArn Tokyo (Account "acc") e
 -- 5. web socket delivery will NOT work, no native push token registered
 genMockEnv :: Gen MockEnv
 genMockEnv = do
-  _meStdGen <- do
-    mkStdGen <$> arbitrary
-
   _meRecipients :: [Recipient]
     <- listOf1 genRecipient
 
@@ -178,8 +181,7 @@ genMockEnv = do
   _meWSReachable <- genPredicate . mconcat $ recipientToIds <$> _meRecipients
   _meNativeReachable <- genPredicate (snd <$> addrs)
 
-  let _meNativeQueue = mempty
-      env = MockEnv {..}
+  let env = MockEnv {..}
 
   validateMockEnv env & either error (const $ pure env)
 
@@ -289,7 +291,8 @@ genPush allrcps = do
     unsafeRange . Set.fromList . nubBy ((==) `on` (^. recipientId)) <$> vectorOf numrcp (QC.elements allrcps)
                   -- TODO: sometimes we only want to send to some clients?  currently we always send to all explicitly
   pload <- genPayload
-  pure $ newPush sender rcps pload
+  inclorigin <- arbitrary
+  pure $ newPush sender rcps pload & pushNativeIncludeOrigin .~ inclorigin
 
 genPayload :: Gen Payload
 genPayload = do
@@ -325,11 +328,12 @@ shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) 
 ----------------------------------------------------------------------
 -- monad type and instances
 
-newtype MockGundeck a = MockGundeck { fromMockGundeck :: StateT MockEnv Identity a }
-  deriving (Functor, Applicative, Monad, MonadState MockEnv)
+newtype MockGundeck a = MockGundeck
+  { fromMockGundeck :: ReaderT MockEnv (StateT MockState Identity) a }
+  deriving (Functor, Applicative, Monad, MonadReader MockEnv, MonadState MockState)
 
-runMockGundeck :: MockEnv -> MockGundeck a -> (a, MockEnv)
-runMockGundeck env (MockGundeck m) = runIdentity $ runStateT m env
+runMockGundeck :: MockEnv -> MockGundeck a -> (a, MockState)
+runMockGundeck env (MockGundeck m) = runIdentity $ runStateT (runReaderT m env) mempty
 
 instance MonadThrow MockGundeck where
   throwM = error . show  -- (we are not expecting any interesting errors in these tests, so we might
@@ -368,15 +372,23 @@ instance Log.MonadLogger MockGundeck where
 mockPushAll
   :: (HasCallStack, m ~ MockGundeck)
   => [Push] -> m ()
-mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
+mockPushAll pushes = do
+  env <- ask
+  modify $ (msWSQueue .~ expectWS env)
+         . (msNativeQueue .~ expectNative env)
   where
+    expectWS :: MockEnv -> Map (UserId, ConnId) Payload
+    expectWS env
+      = _
+
     expectNative :: MockEnv -> Map (UserId, ClientId) Payload
-    expectNative env = Map.fromList
-                 . filter reachable
-                 . reformat
-                 . mconcat . fmap removeSelf
-                 . mconcat . fmap insertAllClients
-                 $ rcps
+    expectNative env
+      = Map.fromList
+      . filter reachable
+      . reformat
+      . mconcat . fmap removeSelf
+      . mconcat . fmap insertAllClients
+      $ rcps
       where
         reachable :: ((UserId, ClientId), payload) -> Bool
         reachable (ids, _) = reachableNative ids && not (reachableWS ids)
@@ -403,7 +415,7 @@ mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
           -- that client, and native-push to all other devices of the originator.
           [(Recipient rcpuid route $ filter (/= sndcid) cids, pay)]
         removeSelf ((_, Nothing, True), same) =
-          -- if no originating client is given and pushNativeIncludeOrigin is True, push to all
+          -- if NO originating client is known and pushNativeIncludeOrigin is True, push to all
           -- originating devices.
           [same]
 
@@ -436,14 +448,14 @@ mockMkNotificationId
   => m NotificationId
 mockMkNotificationId = Id <$> state go
   where
-    go env = case random (env ^. meStdGen) of
-      (uuid, g') -> (uuid, env & meStdGen .~ g')
+    go env = case random (env ^. msNonRandomGen) of
+      (uuid, g') -> (uuid, env & msNonRandomGen .~ g')
 
 mockListAllPresences
   :: (HasCallStack, m ~ MockGundeck)
   => [UserId] -> m [[Presence]]
 mockListAllPresences uids = do
-  hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> gets (^. meRecipients)
+  hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> asks (^. meRecipients)
   pure $ fakePresences <$> hits
 
 -- fake implementation of 'Web.bulkPush'
@@ -451,18 +463,25 @@ mockBulkPush
   :: (HasCallStack, m ~ MockGundeck)
   => [(Notification, [Presence])] -> m [(NotificationId, [Presence])]
 mockBulkPush notifs = do
-  env <- get
+  env <- ask
 
   let isreachable :: Presence -> Bool
       isreachable prc = (userId prc, fromJust $ clientId prc) `elem` (env ^. meWSReachable)
 
-      delivered :: [Presence]
-      delivered = filter isreachable . mconcat . fmap fakePresences $ env ^. meRecipients
+      delivered :: [(Notification, [Presence])]
+      delivered =  [ (nid, prcs)
+                   | (nid, filter (`elem` deliveredprcs) -> prcs) <- notifs
+                   , not $ null prcs  -- (sic!) (this is what gundeck currently does)
+                   ]
 
-  pure [ (nid, prcs)
-       | (ntfId -> nid, filter (`elem` delivered) -> prcs) <- notifs
-       , not $ null prcs  -- (sic!) (this is what gundeck currently does)
-       ]
+      deliveredprcs :: [Presence]
+      deliveredprcs = filter isreachable . mconcat . fmap fakePresences $ env ^. meRecipients
+
+  forM_ delivered $ \(notif, prcs) -> do
+    forM_ prcs $ \prc -> do
+      modify $ msWSQueue %~ Map.insert (userId prc, connId prc) (ntfPayload notif)
+
+  pure $ (_1 %~ ntfId) <$> delivered
 
 -- | persisting notification is not needed for the tests at the moment, so we do nothing here.
 mockStreamAdd
@@ -474,15 +493,15 @@ mockPushNative
   :: (HasCallStack, m ~ MockGundeck)
   => Notification -> Push -> [Address "no-keys"] -> m ()
 mockPushNative _nid ((^. pushPayload) -> payload) addrs = do
-  (flip elem -> isreachable) <- gets (^. meNativeReachable)
+  (flip elem -> isreachable) <- asks (^. meNativeReachable)
   forM_ addrs $ \addr -> do
-    when (isreachable addr) . modify $ meNativeQueue %~ Map.insert (addr ^. addrUser, addr ^. addrClient) payload
+    when (isreachable addr) . modify $ msNativeQueue %~ Map.insert (addr ^. addrUser, addr ^. addrClient) payload
 
 mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
   => UserId -> m [Address "no-keys"]
 mockLookupAddress uid = do
-  getaddr <- gets (^. meNativeAddress)
+  getaddr <- asks (^. meNativeAddress)
   maybe (pure []) (pure . Map.elems) $ Map.lookup uid getaddr
 
 mockBulkSend
@@ -491,14 +510,18 @@ mockBulkSend
   -> m (URI, Either SomeException BulkPushResponse)
 mockBulkSend uri notifs = do
   reachables :: Set PushTarget
-    <- Set.map (uncurry PushTarget . (_2 %~ fakeConnId)) <$> gets (^. meWSReachable)
+    <- Set.map (uncurry PushTarget . (_2 %~ fakeConnId)) <$> asks (^. meWSReachable)
   let getstatus trgt = if trgt `Set.member` reachables
                        then PushStatusOk
                        else PushStatusGone
 
-      flattenBulkPushRequest :: BulkPushRequest -> [(NotificationId, PushTarget)]
-      flattenBulkPushRequest (BulkPushRequest ntifs) =
-        mconcat $ (\(ntif, trgts) -> (ntfId ntif,) <$> trgts) <$> ntifs
+      flat :: [(Notification, PushTarget)]
+      flat = case notifs of
+        (BulkPushRequest ntifs) ->
+          mconcat $ (\(ntif, trgts) -> (ntif,) <$> trgts) <$> ntifs
+
+  forM_ flat $ \(ntif, ptgt) -> do
+      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, ptConnId ptgt) (ntfPayload ntif)
 
   pure . (uri,) . Right $ BulkPushResponse
-    [ (nid, trgt, getstatus trgt) | (nid, trgt) <- flattenBulkPushRequest notifs ]
+    [ (ntfId ntif, trgt, getstatus trgt) | (ntif, trgt) <- flat ]
