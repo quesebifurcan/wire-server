@@ -394,15 +394,18 @@ mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
             go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
         removeSelf :: ((UserId, Maybe ClientId, Bool), (Recipient, Payload)) -> [(Recipient, Payload)]
-        removeSelf ((_, _, True), same@(Recipient _ _ _, _)) =
-          -- 'pushNativeIncludeOrigin' disables any self removal.
-          [same]
-        removeSelf ((sndr, Nothing, False), same@(Recipient rcp _ _, _)) =
-          -- sending user receives no native pushes to any of her devices.
-          [same | sndr /= rcp]
-        removeSelf ((_, Just sender, False), (Recipient uid route cids, pay)) =
-          -- cid determines uid, hence no need to compare that.
-          [(Recipient uid route $ filter (/= sender) cids, pay)]
+        removeSelf ((snduid, _, False), same@(Recipient rcpuid _ _, _)) =
+          -- if pushNativeIncludeOrigin is False, none of the originator's devices will receive
+          -- native pushes.
+          [same | snduid /= rcpuid]
+        removeSelf ((_, Just sndcid, True), (Recipient rcpuid route cids, pay)) =
+          -- if originating client is known and pushNativeIncludeOrigin is True, filter out just
+          -- that client, and native-push to all other devices of the originator.
+          [(Recipient rcpuid route $ filter (/= sndcid) cids, pay)]
+        removeSelf ((snduid, Nothing, True), same@(Recipient rcpuid _ _, _)) =
+          -- if no originating client is given and pushNativeIncludeOrigin is True, do not
+          -- native-push to any devices of the originator.
+          [same | snduid /= rcpuid]
 
         insertAllClients :: (any, (Recipient, Payload))
                          -> [(any, (Recipient, Payload))]
