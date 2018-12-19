@@ -169,14 +169,12 @@ compilePushReq (psh, notifsAndTargets) =
                               $ (rcp,) <$> pre
 
 compilePushResps
-  :: [(Push, (Notification, List1 (Recipient, [Presence])))]
+  :: [(Push, (Notification, any))]
   -> [(NotificationId, [Presence])]
   -> [((Notification, Push), [Presence])]
 compilePushResps notifIdMap (Map.fromList -> deliveries) =
   notifIdMap <&>
-    (\(psh, (notif, mconcat . fmap snd . toList -> (allprcs :: [Presence]))) ->
-       ((notif, psh), fromMaybe allprcs $ Map.lookup (ntfId notif) deliveries))
-
+    (\(psh, (notif, _)) -> ((notif, psh), fromMaybe [] (Map.lookup (ntfId notif) deliveries)))
 
 
 -- | Look up 'Push' recipients in Redis, construct a notifcation, and return all the data needed for
