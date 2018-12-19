@@ -9,7 +9,7 @@
 module Gundeck.Push.Websocket (push, bulkPush, MonadBulkPush(..)) where
 
 import Imports
-import Bilge
+import Bilge hiding (trace)
 import Bilge.Retry (rpcHandlers)
 import Bilge.RPC
 import Control.Arrow ((&&&))

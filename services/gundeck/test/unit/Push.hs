@@ -27,6 +27,7 @@ import Test.QuickCheck
 import Test.QuickCheck.Instances ()
 import Test.Tasty
 import Test.Tasty.HUnit
+import Test.Tasty.QuickCheck
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
@@ -38,8 +39,8 @@ main = defaultMain tests
 tests :: TestTree
 tests = testGroup "bulkpush" $
     ((\n -> testCase (show n) $ test n) <$> [1..9]) <>
-    [ -- testProperty "web sockets" webBulkPushProps
-      -- testProperty "native pushes" pushAllProps
+    [ testProperty "web sockets" webBulkPushProps
+    , testProperty "native pushes" pushAllProps
     ]
 
 
@@ -99,7 +100,7 @@ pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes
     ((), mockst) = runMockGundeck env (mockPushAll pushes)
     props = [ (Aeson.eitherDecode . Aeson.encode) pushes === Right pushes
             , (Aeson.eitherDecode . Aeson.encode) env === Right env
-            , realst === mockst
+            , whipeRandomGen realst === mockst
             ]
 
 

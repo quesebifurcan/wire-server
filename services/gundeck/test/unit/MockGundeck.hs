@@ -36,7 +36,7 @@ import Gundeck.Push.Native as Native
 import Gundeck.Push.Websocket as Web
 import Gundeck.Types
 import Gundeck.Types.BulkPush
-import System.Logger.Class as Log
+import System.Logger.Class as Log hiding (trace)
 import System.Random
 import Test.QuickCheck as QC
 import Test.QuickCheck.Instances ()
@@ -88,6 +88,9 @@ instance Eq StdGen where
 
 makeLenses ''MockEnv
 makeLenses ''MockState
+
+whipeRandomGen :: MockState -> MockState
+whipeRandomGen = msNonRandomGen .~ (mempty ^. msNonRandomGen)
 
 instance Semigroup MockState where
   (MockState _ ws nat) <> (MockState gen ws' nat') = MockState gen (ws <> ws') (nat <> nat')
@@ -182,7 +185,6 @@ genMockEnv = do
   _meNativeReachable <- genPredicate (snd <$> addrs)
 
   let env = MockEnv {..}
-
   validateMockEnv env & either error (const $ pure env)
 
 shrinkMockEnv :: MockEnv -> [MockEnv]
