@@ -73,8 +73,13 @@ webBulkPushProps plen@(Positive len) = mkEnv mkNotifs plen
       (prop env)
 
     prop :: MockEnv -> Pretty [(Notification, [Presence])] -> Property
-    prop env (Pretty notifs) = (sort . fst . runMockGundeck env $ Web.bulkPush notifs)
-                           === (sort . fst . runMockGundeck env $ mockBulkPush notifs)
+    prop env (Pretty notifs) = foldl' (.&&.) (once True) props
+      where
+        (realout, realst) = runMockGundeck env $ Web.bulkPush notifs
+        (mockout, mockst) = runMockGundeck env $ mockBulkPush notifs
+        props = [ realst === mockst
+                , sort realout === sort mockout
+                ]
 
 
 pushAllProps :: Positive Int -> Property

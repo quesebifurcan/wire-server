@@ -552,7 +552,7 @@ mockBulkSend uri notifs = do
           mconcat $ (\(ntif, trgts) -> (ntif,) <$> trgts) <$> ntifs
 
   forM_ flat $ \(ntif, ptgt) -> do
-      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
+    modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
 
   pure . (uri,) . Right $ BulkPushResponse
     [ (ntfId ntif, trgt, getstatus trgt) | (ntif, trgt) <- flat ]
