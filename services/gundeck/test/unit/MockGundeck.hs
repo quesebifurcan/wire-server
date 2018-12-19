@@ -81,10 +81,12 @@ data MockEnv = MockEnv
 
 data MockState = MockState
   { _msNonRandomGen    :: StdGen
-  , _msWSQueue         :: Map (UserId, ClientId) Payload
-  , _msNativeQueue     :: Map (UserId, ClientId) Payload
+  , _msWSQueue         :: NotifQueue
+  , _msNativeQueue     :: NotifQueue
   }
   deriving (Eq, Show)
+
+type NotifQueue = Map (UserId, ClientId) (Set Int)
 
 instance Eq StdGen where
   (==) = (==) `on` show
@@ -380,9 +382,9 @@ mockPushAll pushes = do
   modify $ (msWSQueue .~ expectWS env)
          . (msNativeQueue .~ expectNative env)
   where
-    expectWS :: MockEnv -> Map (UserId, ClientId) Payload
+    expectWS :: MockEnv -> NotifQueue
     expectWS env
-      = Map.fromList
+      = foldl' (uncurry . deliver) mempty
       . filter reachable
       . reformat
       . mconcat . fmap removeSelf
@@ -409,9 +411,9 @@ mockPushAll pushes = do
         -- otherwise, no special hidden meaning.
         insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
 
-    expectNative :: MockEnv -> Map (UserId, ClientId) Payload
+    expectNative :: MockEnv -> NotifQueue
     expectNative env
-      = Map.fromList
+      = foldl' (uncurry . deliver) mempty
       . filter reachable
       . reformat
       . mconcat . fmap removeSelf
@@ -514,7 +516,7 @@ mockBulkPush notifs = do
 
   forM_ delivered $ \(notif, prcs) -> do
     forM_ prcs $ \prc -> do
-      modify $ msWSQueue %~ Map.insert (userId prc, clientIdFromConnId $ connId prc) (ntfPayload notif)
+      modify $ msWSQueue %~ \queue -> deliver queue (userId prc, clientIdFromConnId $ connId prc) (ntfPayload notif)
 
   pure $ (_1 %~ ntfId) <$> delivered
 
@@ -530,7 +532,7 @@ mockPushNative
 mockPushNative _nid ((^. pushPayload) -> payload) addrs = do
   (flip elem -> isreachable) <- asks (^. meNativeReachable)
   forM_ addrs $ \addr -> do
-    when (isreachable addr) . modify $ msNativeQueue %~ Map.insert (addr ^. addrUser, addr ^. addrClient) payload
+    when (isreachable addr) . modify $ msNativeQueue %~ \queue -> deliver queue (addr ^. addrUser, addr ^. addrClient) payload
 
 mockLookupAddress
   :: (HasCallStack, m ~ MockGundeck)
@@ -558,7 +560,21 @@ mockBulkSend uri notifs = do
 
   forM_ flat $ \(ntif, ptgt) -> do
     when (getstatus ptgt == PushStatusOk) $ do
-      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
+      modify $ msWSQueue %~ \queue -> deliver queue (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
 
   pure . (uri,) . Right $ BulkPushResponse
     [ (ntfId ntif, trgt, getstatus trgt) | (ntif, trgt) <- flat ]
+
+
+----------------------------------------------------------------------
+-- helpers
+
+deliver :: NotifQueue -> (UserId, ClientId) -> Payload -> NotifQueue
+deliver queue qkey qval = Map.alter (Just . tweak) qkey queue
+  where
+    tweak Nothing      = Set.singleton (payloadToInt qval)
+    tweak (Just qvals) = Set.insert    (payloadToInt qval) qvals
+
+payloadToInt :: Payload -> Int
+payloadToInt (List1 (toList -> [toList -> [Number x]])) = round $ toRational (x * 100)
+payloadToInt bad = error $ "unexpected Payload: " <> show bad
