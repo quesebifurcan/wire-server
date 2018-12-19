@@ -37,9 +37,9 @@ main = defaultMain tests
 
 tests :: TestTree
 tests = testGroup "bulkpush" $
-    ((\n -> testCase (show n) $ test n) <$> [1..4]) <>
-    [ testProperty "web sockets" webBulkPushProps
-    , testProperty "native pushes" pushAllProps
+    ((\n -> testCase (show n) $ test n) <$> [1..9]) <>
+    [ -- testProperty "web sockets" webBulkPushProps
+      -- testProperty "native pushes" pushAllProps
     ]
 
 
@@ -48,7 +48,7 @@ mkEnv prop (Positive len) = forAllShrink (Pretty <$> resize len genMockEnv) (shr
 
 
 testRootPath :: FilePath
-testRootPath = "../mock-samples"
+testRootPath = "test/mock-samples"
 
 test :: Int -> Assertion
 test i = do

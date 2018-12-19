@@ -183,11 +183,13 @@ test-suite gundeck-tests
     build-depends:
         base
       , aeson
+      , aeson-pretty
       , amazonka
       , base64-bytestring
       , bytestring
       , containers
       , exceptions
+      , filepath
       , gundeck
       , gundeck-types
       , HsOpenSSL
@@ -195,7 +197,6 @@ test-suite gundeck-tests
       , lens
       , mtl
       , network-uri
-      , pretty-show
       , QuickCheck
       , quickcheck-instances
       , random
