@@ -17,8 +17,6 @@ module Push where
 
 import Imports
 import Control.Lens
-import Data.Id
-import Data.Range
 import Data.String.Conversions (cs)
 import Gundeck.Push (pushAll)
 import Gundeck.Push.Websocket as Web (bulkPush)
@@ -29,12 +27,10 @@ import Test.QuickCheck
 import Test.QuickCheck.Instances ()
 import Test.Tasty
 import Test.Tasty.HUnit
-import Test.Tasty.QuickCheck
 
 import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
-import qualified Data.Map as Map
-import qualified Data.Set as Set
+
 
 main :: IO ()
 main = defaultMain tests
@@ -102,16 +98,15 @@ pushAllProp env (Pretty pushes) = counterexample (cs $ Aeson.encode (env, pushes
             ]
 
 
-      -- TODO: meCassQueue (to be introduced) contains exactly those notifications that are
-      -- non-transient.
+      -- TODO: test: meCassQueue (to be introduced) contains exactly those notifications that are
+      --       non-transient.
 
-      -- TODO: make Web.push mockable and actually receive messages sent over websocket via Chan,
-      -- and store them in meWSQueue (to be introduced).  the test that messages expected to go over
-      -- websocket actually will.
+      -- TODO: test: meWSQueue (to be introduced contains websocket deliveries.
 
       -- TODO: test Presences with @ClientId = Nothing@
 
       -- TODO: test 'Route' more exhaustively.
 
-
-      -- TODO: i think notifications go to sender via websocket right now.  should we turn that off, too?  (write a test)
+      -- TODO: newPush doesn't cover a lot of the domain of the 'Push' type.  figure out what the
+      --       actually expected values are, and constrain the type accordingly.  if we need to be
+      --       downwards compatible perhaps we can do that in the json parsers.

@@ -393,16 +393,21 @@ mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
           where
             go (Recipient uid _ cids, pay) = (\cid -> ((uid, cid), pay)) <$> cids
 
-        removeSelf :: ((UserId, Maybe ClientId), (Recipient, Payload)) -> [(Recipient, Payload)]
-        removeSelf ((sndr, Nothing), same@(Recipient rcp _ _, _)) =
+        removeSelf :: ((UserId, Maybe ClientId, Bool), (Recipient, Payload)) -> [(Recipient, Payload)]
+        removeSelf ((_, _, True), same@(Recipient _ _ _, _)) =
+          -- 'pushNativeIncludeOrigin' disables any self removal.
+          [same]
+        removeSelf ((sndr, Nothing, False), same@(Recipient rcp _ _, _)) =
+          -- sending user receives no native pushes to any of her devices.
           [same | sndr /= rcp]
-        removeSelf ((_, Just sender), (Recipient uid route cids, pay)) =
+        removeSelf ((_, Just sender, False), (Recipient uid route cids, pay)) =
+          -- cid determines uid, hence no need to compare that.
           [(Recipient uid route $ filter (/= sender) cids, pay)]
 
-        insertAllClients :: ((UserId, Maybe ClientId), (Recipient, Payload))
-                         -> [((UserId, Maybe ClientId), (Recipient, Payload))]
+        insertAllClients :: (any, (Recipient, Payload))
+                         -> [(any, (Recipient, Payload))]
         -- if the recipient client list is empty, fill in all devices of that user
-        insertAllClients (same@_, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
+        insertAllClients (same, (Recipient uid route [], pay)) = [(same, (rcp', pay))]
           where
             rcp' = Recipient uid route defaults
             defaults = maybe [] Map.keys . Map.lookup uid $ env ^. meNativeAddress
@@ -410,12 +415,15 @@ mockPushAll pushes = modify $ \env -> env & meNativeQueue .~ expectNative env
         -- otherwise, no special hidden meaning.
         insertAllClients same@(_, (Recipient _ _ (_:_), _)) = [same]
 
-        rcps :: [((UserId, Maybe ClientId), (Recipient, Payload))]
+        rcps :: [((UserId, Maybe ClientId, Bool), (Recipient, Payload))]
         rcps = mconcat $ go <$> filter (not . (^. pushTransient)) pushes
           where
-            go push = ((push ^. pushOrigin, clientIdFromConnId <$> push ^. pushOriginConnection),)
-                    . (,push ^. pushPayload)
-                  <$> (Set.toList . fromRange $ push ^. pushRecipients)
+            go psh = (( psh ^. pushOrigin
+                      , clientIdFromConnId <$> psh ^. pushOriginConnection
+                      , psh ^. pushNativeIncludeOrigin
+                      ),)
+                   . (,psh ^. pushPayload)
+                  <$> (Set.toList . fromRange $ psh ^. pushRecipients)
 
 
 -- | (There is certainly a fancier implementation using '<%=' or similar, but this one is easier to
@@ -486,8 +494,8 @@ mockBulkSend uri notifs = do
                        else PushStatusGone
 
       flattenBulkPushRequest :: BulkPushRequest -> [(NotificationId, PushTarget)]
-      flattenBulkPushRequest (BulkPushRequest notifs) =
-        mconcat $ (\(notif, trgts) -> (ntfId notif,) <$> trgts) <$> notifs
+      flattenBulkPushRequest (BulkPushRequest ntifs) =
+        mconcat $ (\(ntif, trgts) -> (ntfId ntif,) <$> trgts) <$> ntifs
 
   pure . (uri,) . Right $ BulkPushResponse
     [ (nid, trgt, getstatus trgt) | (nid, trgt) <- flattenBulkPushRequest notifs ]
