@@ -486,8 +486,10 @@ mockListAllPresences
   :: (HasCallStack, m ~ MockGundeck)
   => [UserId] -> m [[Presence]]
 mockListAllPresences uids = do
-  hits :: [Recipient] <- filter ((`elem` uids) . (^. recipientId)) <$> asks (^. meRecipients)
-  pure $ fakePresences <$> hits
+  allrecipients :: Map UserId Recipient
+    <- asks (^. meRecipients) <&>
+       Map.fromList . fmap (\rcp@(Recipient uid _ _) -> (uid, rcp))
+  pure $ maybe [] fakePresences . (`Map.lookup` allrecipients) <$> uids
 
 -- | Fake implementation of 'Web.bulkPush'.
 mockBulkPush
