@@ -62,6 +62,9 @@ newtype Pretty a = Pretty a
 instance Aeson.ToJSON a => Show (Pretty a) where
   show (Pretty a) = cs $ Aeson.encodePretty a
 
+shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
+shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
+
 
 ----------------------------------------------------------------------
 -- env
@@ -156,7 +159,7 @@ mkFakeAddrEndpoint (epid, transport, app) = Aws.mkSnsArn Tokyo (Account "acc") e
 genMockEnv :: Gen MockEnv
 genMockEnv = do
   _meRecipients :: [Recipient]
-    <- listOf1 genRecipient
+    <- nubBy ((==) `on` (^. recipientId)) <$> listOf1 genRecipient
 
   protoaddrs :: [UserId -> ClientId -> Address "no-keys"]
     <- do
@@ -228,7 +231,7 @@ genPredicate xs = Set.fromList <$> do
 genRecipient :: HasCallStack => Gen Recipient
 genRecipient = do
   uid  <- genId
-  cids <- listOf1 genClientId
+  cids <- nub <$> listOf1 genClientId
   pure $ Recipient uid RouteAny cids
 
 genId :: Gen (Id a)
@@ -269,21 +272,6 @@ genProtoAddress = do
 genPushes :: [Recipient] -> Gen [Push]
 genPushes = listOf . genPush
 
-shrinkPushes :: [Push] -> [[Push]]
-shrinkPushes = shrinkList shrinkPush
-  where
-    shrinkPush :: Push -> [Push]
-    shrinkPush psh = (\rcps -> psh & pushRecipients .~ rcps) <$> shrinkRecipients (psh ^. pushRecipients)
-
-    shrinkRecipients :: Range 1 1024 (Set Recipient) -> [Range 1 1024 (Set Recipient)]
-    shrinkRecipients = fmap unsafeRange . map Set.fromList . filter (not . null) . shrinkList shrinkRecipient . Set.toList . fromRange
-
-    shrinkRecipient :: Recipient -> [Recipient]
-    shrinkRecipient _ = []
-
-shrinkPretty :: (a -> [a]) -> Pretty a -> [Pretty a]
-shrinkPretty shrnk (Pretty xs) = Pretty <$> shrnk xs
-
 -- | REFACTOR: What 'Route's are we still using, and what for?  This code is currently only testing
 -- 'RouteAny'.
 genPush :: [Recipient] -> Gen Push
@@ -296,6 +284,18 @@ genPush allrcps = do
   pload <- genPayload
   inclorigin <- arbitrary
   pure $ newPush sender rcps pload & pushNativeIncludeOrigin .~ inclorigin
+
+shrinkPushes :: [Push] -> [[Push]]
+shrinkPushes = shrinkList shrinkPush
+  where
+    shrinkPush :: Push -> [Push]
+    shrinkPush psh = (\rcps -> psh & pushRecipients .~ rcps) <$> shrinkRecipients (psh ^. pushRecipients)
+
+    shrinkRecipients :: Range 1 1024 (Set Recipient) -> [Range 1 1024 (Set Recipient)]
+    shrinkRecipients = fmap unsafeRange . map Set.fromList . filter (not . null) . shrinkList shrinkRecipient . Set.toList . fromRange
+
+    shrinkRecipient :: Recipient -> [Recipient]
+    shrinkRecipient _ = []
 
 genPayload :: Gen Payload
 genPayload = do
@@ -319,10 +319,10 @@ genNotif = Notification <$> genId <*> arbitrary <*> genPayload
 genNotifs :: [Recipient] -> Gen [(Notification, [Presence])]
 genNotifs (mconcat . fmap fakePresences -> allprcs) = fmap uniqNotifs . listOf $ do
   notif <- genNotif
-  prcs <- listOf $ QC.elements allprcs
+  prcs <- nub <$> listOf (QC.elements allprcs)
   pure (notif, prcs)
   where
-    uniqNotifs = nubBy ((==) `on` (ntfId . fst)) . fmap (_2 %~ nub)
+    uniqNotifs = nubBy ((==) `on` (ntfId . fst))
 
 shrinkNotifs :: [(Notification, [Presence])] -> [[(Notification, [Presence])]]
 shrinkNotifs = shrinkList (\(notif, prcs) -> (notif,) <$> shrinkList (const []) prcs)
@@ -546,6 +546,7 @@ mockBulkSend
 mockBulkSend uri notifs = do
   reachables :: Set PushTarget
     <- Set.map (uncurry PushTarget . (_2 %~ fakeConnId)) <$> asks (^. meWSReachable)
+
   let getstatus trgt = if trgt `Set.member` reachables
                        then PushStatusOk
                        else PushStatusGone
@@ -556,7 +557,8 @@ mockBulkSend uri notifs = do
           mconcat $ (\(ntif, trgts) -> (ntif,) <$> trgts) <$> ntifs
 
   forM_ flat $ \(ntif, ptgt) -> do
-    modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
+    when (getstatus ptgt == PushStatusOk) $ do
+      modify $ msWSQueue %~ Map.insert (ptUserId ptgt, clientIdFromConnId $ ptConnId ptgt) (ntfPayload ntif)
 
   pure . (uri,) . Right $ BulkPushResponse
     [ (ntfId ntif, trgt, getstatus trgt) | (ntif, trgt) <- flat ]

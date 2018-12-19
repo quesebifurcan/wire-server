@@ -33,12 +33,10 @@ import qualified Data.Aeson as Aeson
 import qualified Data.ByteString.Lazy as LBS
 
 
-main :: IO ()
-main = defaultMain tests
-
 tests :: TestTree
 tests = testGroup "bulkpush" $
-    ((\n -> testCase (show n) $ test n) <$> [1..9]) <>
+    ((\n -> testCase (show n) $ test pushAllProp n) <$> [1..9]) <>
+    [ testCase "10" $ test webBulkPushProp 10 ] <>
     [ testProperty "web sockets" webBulkPushProps
     , testProperty "native pushes" pushAllProps
     ]
@@ -51,11 +49,13 @@ mkEnv prop (Positive len) = forAllShrink (Pretty <$> resize len genMockEnv) (shr
 testRootPath :: FilePath
 testRootPath = "test/mock-samples"
 
-test :: Int -> Assertion
-test i = do
-  Just ((env, input) :: (MockEnv, [Push]))
+test
+  :: forall input. Aeson.FromJSON input
+  => (MockEnv -> Pretty input -> Property) -> Int -> Assertion
+test runtest i = do
+  Just ((env, input) :: (MockEnv, input))
     <- Aeson.decode <$> LBS.readFile (testRootPath </> show i <> ".json")
-  runProp $ pushAllProp env (Pretty input)
+  runProp $ runtest env (Pretty input)
 
 runProp :: Property -> Assertion
 runProp propty = quickCheckWithResult stdArgs { maxSuccess = 1, chatty = False } propty >>= \case
@@ -71,10 +71,11 @@ webBulkPushProps plen@(Positive len) = mkEnv mkNotifs plen
     mkNotifs (Pretty env) = forAllShrink
       (Pretty <$> resize len (genNotifs (env ^. meRecipients)))
       (shrinkPretty shrinkNotifs)
-      (prop env)
+      (webBulkPushProp env)
 
-    prop :: MockEnv -> Pretty [(Notification, [Presence])] -> Property
-    prop env (Pretty notifs) = foldl' (.&&.) (once True) props
+webBulkPushProp :: MockEnv -> Pretty [(Notification, [Presence])] -> Property
+webBulkPushProp env (Pretty notifs) = counterexample (cs $ Aeson.encode (env, notifs))
+                                    $ foldl' (.&&.) (once True) props
       where
         (realout, realst) = runMockGundeck env $ Web.bulkPush notifs
         (mockout, mockst) = runMockGundeck env $ mockBulkPush notifs
